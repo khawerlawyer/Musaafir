@@ -183,6 +183,8 @@ details summary{cursor:pointer;font-weight:600;font-size:13px;color:var(--muted)
 }
 
 .trip-wrap{position:relative}
+.locate{display:flex;align-items:center;gap:8px;border:0;background:transparent;color:var(--brand);font-weight:600;font-size:14px;padding:2px 2px;margin-top:-6px;align-self:flex-start}
+.locate:hover{text-decoration:underline}
 .sug{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:15;list-style:none;margin:0;padding:6px;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:0 10px 30px rgba(10,20,40,.16);max-height:320px;overflow:auto}
 .sug li[role="option"]{padding:9px 10px;border-radius:8px;cursor:pointer;display:flex;flex-direction:column;gap:1px}
 .sug li[role="option"] span{font-size:12.5px;color:var(--muted)}
@@ -214,6 +216,7 @@ details summary{cursor:pointer;font-weight:600;font-size:13px;color:var(--muted)
     <div class="map-ctl">
       <button class="chip" id="nightBtn" aria-pressed="false">Night trip</button>
       <button class="chip" id="riskBtn" aria-pressed="true">Show hazards</button>
+      <button class="chip" id="trafficBtn" aria-pressed="true" hidden>Live traffic</button>
     </div>
     <div class="map-legend" id="legend"></div>
   </section>
@@ -229,7 +232,7 @@ details summary{cursor:pointer;font-weight:600;font-size:13px;color:var(--muted)
    With no key (or inside the Claude preview) the page runs in demo mode.
    ========================================================= */
 const GOOGLE_MAPS_KEY = 'AIzaSyCz4fanS5tJ7mMqHw79Xw7EYQ7QUYGLxvE';
-const REGION = 'pk';   // country for address suggestions
+const REGION = '';   // optional: limit suggestions to one country, e.g. 'pk' or 'us'. Empty = worldwide
 
 /* ---------- Demo places (used when Google Maps isn't loaded) ---------- */
 const PLACES = [
@@ -276,9 +279,12 @@ const TYPES = [
 ];
 const PLATFORM_FEE = 0.10;      // Musaafir keeps 10%, flat and shown to both sides
 const PICKUP_KM = 2.4, PICKUP_MIN = 8, WAIT_MIN = 4;
-const NOW = { h:10, m:40 };
+const _now = new Date();
+const NOW = { h:_now.getHours(), m:_now.getMinutes() };
+const _dl = new Date(_now.getTime()+60*60000);
+const DEFAULT_DEADLINE = `${String(_dl.getHours()).padStart(2,'0')}:${String(_dl.getMinutes()).padStart(2,'0')}`;
 
-const S = { mode:'rider', route:'safe', type:'ac', offer:null, deadline:'11:30', night:false, hazards:true,
+const S = { mode:'rider', route:'safe', type:'ac', offer:null, deadline:DEFAULT_DEADLINE, traffic:true, night:false, hazards:true,
   from:PLACES[0], to:PLACES[1],
   petrol:265, kmpl:12, wearPerKm:3, driven:370, earned:6820, requested:false, accepted:false, timer:45, loading:false };
 let G = null;   // Google Maps handles once loaded
@@ -341,11 +347,14 @@ function demoRoutes(){
   ];
 }
 async function googleRoutes(){
-  const { routes } = await G.Route.computeRoutes({
+  const req = {
     origin:{lat:S.from.lat,lng:S.from.lng}, destination:{lat:S.to.lat,lng:S.to.lng},
     travelMode:'DRIVING', computeAlternativeRoutes:true,
     fields:['path','viewport','routeLabels','distanceMeters','durationMillis'],
-  });
+  };
+  let routes;
+  try{ ({ routes } = await G.Route.computeRoutes({ ...req, routingPreference:'TRAFFIC_AWARE', departureTime:new Date() })); }
+  catch(e){ ({ routes } = await G.Route.computeRoutes(req)); }
   if(!routes?.length) throw new Error('No route found');
   const list = routes.map((g,i)=>({ g, i, km:+(g.distanceMeters/1000).toFixed(1), min:Math.max(1,Math.round((g.durationMillis||0)/60000)) }));
   const byTime = [...list].sort((a,b)=>a.min-b.min);
@@ -366,7 +375,7 @@ async function computeRoutes(){
   if(G){
     S.loading = true; render();
     try{ ROUTES = await googleRoutes(); }
-    catch(e){ ROUTES = demoRoutes(); toast('Google couldn\'t find a driving route. Showing estimates.'); }
+    catch(e){ console.error('Google routes failed:', e); ROUTES = demoRoutes(); toast('Google routes failed: ' + (e && e.message ? e.message.slice(0,120) : 'no driving route found') + '. Showing estimates.'); }
     S.loading = false;
     G.fit = true;
   } else ROUTES = demoRoutes();
@@ -378,10 +387,16 @@ async function suggest(q){
   if(G){
     try{
       if(!G.token) G.token = new G.AutocompleteSessionToken();
-      const { suggestions } = await G.AutocompleteSuggestion.fetchAutocompleteSuggestions({
-        input:q, sessionToken:G.token, includedRegionCodes:[REGION], origin:{lat:S.from.lat,lng:S.from.lng} });
+      const req = { input:q, sessionToken:G.token };
+      if(REGION) req.includedRegionCodes = [REGION];
+      if(G.here) req.locationBias = { center:G.here, radius:50000 };
+      const { suggestions } = await G.AutocompleteSuggestion.fetchAutocompleteSuggestions(req);
       return suggestions.filter(s=>s.placePrediction).slice(0,6).map(s=>({ label:s.placePrediction.text.toString(), pred:s.placePrediction }));
-    }catch(e){ return []; }
+    }catch(e){
+      console.error('Google address search failed:', e);
+      toast('Google address search failed: ' + (e && e.message ? e.message.slice(0,140) : 'unknown error'));
+      return [];
+    }
   }
   const t = q.trim().toLowerCase();
   return PLACES.filter(p=>(p.name+' '+p.addr).toLowerCase().includes(t)).slice(0,6).map(p=>({ label:p.name, sub:p.addr, place:p }));
@@ -421,6 +436,25 @@ function wireAuto(id, field){
     else if(ev.key==='Escape'){ close(); input.value=S[field].name; }
   });
   input.addEventListener('blur',()=>setTimeout(()=>{ if(list.dataset.field===field) close(); if(document.activeElement!==input) input.value=S[field].name; },150));
+}
+
+/* ---------- Current location ---------- */
+function useMyLocation(){
+  if(!navigator.geolocation){ toast('This browser can\'t share your location.'); return; }
+  toast('Finding your location…');
+  navigator.geolocation.getCurrentPosition(async pos=>{
+    const lat=pos.coords.latitude, lng=pos.coords.longitude;
+    let name='Current location', addr='';
+    if(G){ try{
+      const { Geocoder } = await google.maps.importLibrary('geocoding');
+      const { results } = await new Geocoder().geocode({ location:{lat,lng} });
+      if(results?.[0]){ addr=results[0].formatted_address; name=addr.split(',').slice(0,2).join(',').trim(); }
+    }catch(e){} }
+    if(G) G.here={lat,lng};
+    S.from={ name, addr, lat, lng }; S.offer=null; S.requested=false;
+    await computeRoutes(); render(); toast('Pickup set to your location');
+  }, err=>toast(err.code===1 ? 'Location access was blocked. Allow it in your browser settings.' : 'Couldn\'t get your location. Type the address instead.'),
+  { enableHighAccuracy:true, timeout:10000 });
 }
 
 /* ---------- Map: Google ---------- */
@@ -487,6 +521,8 @@ function renderMap(){
     <span><i class="sw" style="background:var(--route-dim)"></i>Other options (tap to switch)</span>
     ${G?'':'<span class="muted">Demo map · live Google map turns on with your API key</span>'}`;
   $('#riskBtn').hidden = !!G;
+  $('#trafficBtn').hidden = !G;
+  if(G && G.trafficLayer) G.trafficLayer.setMap(S.traffic ? G.map : null);
 }
 
 /* ---------- Rider ---------- */
@@ -528,6 +564,7 @@ function renderRider(){
       </div>
       <ul class="sug" id="sug" role="listbox" hidden></ul>
     </div>
+    <button class="locate" id="locate" type="button"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3" fill="currentColor"/><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 0v2M8 14v2M0 8h2M14 8h2" stroke="currentColor" stroke-width="1.5"/></svg>Use my current location for pickup</button>
     <div class="deadline"><label for="dl">I need to arrive by</label><input type="time" id="dl" value="${S.deadline}"></div>
 
     <div class="section"><span class="eyebrow">Ride type</span><div class="types">${typeBtns}</div></div>
@@ -550,9 +587,10 @@ function renderRider(){
     <p class="note">Fare is fixed once a driver accepts. No surge on top of your offer.</p>`;
 
   wireAuto('from','from'); wireAuto('to','to');
+  $('#locate').onclick=useMyLocation;
   $('#panel').querySelectorAll('[data-type]').forEach(b=>b.onclick=()=>{S.type=b.dataset.type;S.offer=null;render();});
   $('#panel').querySelectorAll('[data-route]').forEach(b=>b.onclick=()=>{S.route=b.dataset.route;S.offer=null;render();});
-  $('#dl').onchange=e=>{S.deadline=e.target.value||'11:30';render();};
+  $('#dl').onchange=e=>{S.deadline=e.target.value||DEFAULT_DEADLINE;render();};
   $('#minus').onclick=()=>{S.offer=Math.max(r10(fair*.6),(S.offer??fair)-20);render();};
   $('#plus').onclick=()=>{S.offer=Math.min(r10(fair*1.6),(S.offer??fair)+20);render();};
   $('#resetFare') && ($('#resetFare').onclick=()=>{S.offer=null;render();});
@@ -679,9 +717,12 @@ async function loadGoogle(){
       google.maps.importLibrary('maps'), google.maps.importLibrary('places'), google.maps.importLibrary('routes') ]);
     $('#gmap').hidden = false; $('#map').hidden = true;
     const map = new Map($('#gmap'), { center:{lat:S.from.lat,lng:S.from.lng}, zoom:12, disableDefaultUI:true, zoomControl:true, clickableIcons:false });
-    G = { map, AutocompleteSuggestion, AutocompleteSessionToken, Route, lines:[], marks:[], token:null, fit:true };
+    const trafficLayer = new google.maps.TrafficLayer();
+    G = { trafficLayer, map, AutocompleteSuggestion, AutocompleteSessionToken, Route, lines:[], marks:[], token:null, fit:true };
+    try{ navigator.permissions?.query({name:'geolocation'}).then(p=>{ if(p.state==='granted') navigator.geolocation.getCurrentPosition(pos=>{ G.here={lat:pos.coords.latitude,lng:pos.coords.longitude}; }); }); }catch(e){}
     await computeRoutes(); render();
   }catch(err){
+    console.error('Google Maps failed to load:', err);
     G = null; $('#gmap').hidden = true; $('#map').hidden = false;
     toast('Google Maps couldn\'t load here. Showing the demo map.');
   }
@@ -691,6 +732,7 @@ async function loadGoogle(){
 function render(){ S.mode==='rider'?renderRider():renderDriver(); renderMap(); }
 ['rider','driver'].forEach(m=>$('#m-'+m).onclick=()=>{S.mode=m;$('#m-rider').setAttribute('aria-pressed',m==='rider');$('#m-driver').setAttribute('aria-pressed',m==='driver');render();});
 $('#nightBtn').onclick=e=>{S.night=!S.night;e.currentTarget.setAttribute('aria-pressed',S.night);render();};
+$('#trafficBtn').onclick=e=>{S.traffic=!S.traffic;e.currentTarget.setAttribute('aria-pressed',S.traffic);render();};
 $('#riskBtn').onclick=e=>{S.hazards=!S.hazards;e.currentTarget.setAttribute('aria-pressed',S.hazards);render();};
 setInterval(()=>{ if(S.mode!=='driver'||S.accepted||S.timer<=0) return; S.timer--; const t=$('#timer'); if(S.timer<=0) render(); else if(t) t.textContent='0:'+String(S.timer).padStart(2,'0'); },1000);
 ROUTES = demoRoutes();
