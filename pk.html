@@ -1615,94 +1615,38 @@ function render(){ renderHeader(); renderPanel(); renderMap(); }
 /* =========================================================
    MUSAAFIR GPS — turn-by-turn navigation with a male voice
    ========================================================= */
-// Navigation voice. First choice: Google's natural, calm male voice (same on every phone).
-// Fallback: the phone's own voice, preferring a male one.
-const CLOUD_VOICE_OK = !!GOOGLE_MAPS_KEY;   // uses the Google key; needs Cloud Text-to-Speech API switched on for that key
-const CLOUD_VOICES = ['en-US-Neural2-J', 'en-US-Neural2-D', 'en-US-Wavenet-D', 'en-US-Standard-B'];   // calm American male voices, best first
-const VOICE_KEY = 'musaafir-voice2';
-function silentWav(){ const n=800, b=new ArrayBuffer(44+n), v=new DataView(b), w=(o,t)=>[...t].forEach((c,i)=>v.setUint8(o+i,c.charCodeAt(0)));
-  w(0,'RIFF'); v.setUint32(4,36+n,true); w(8,'WAVE'); w(12,'fmt '); v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
-  v.setUint32(24,8000,true); v.setUint32(28,8000,true); v.setUint16(32,1,true); v.setUint16(34,8,true); w(36,'data'); v.setUint32(40,n,true);
-  for(let i=0;i<n;i++) v.setUint8(44+i,128); return URL.createObjectURL(new Blob([b],{type:'audio/wav'})); }
 const Voice = {
-  on:true, voice:null, audio:null, cloudFailed:false, fails:0, cache:new Map(), seq:0,
+  on:true, voice:null, chosen:null,
   // Voices known to be male on Windows, macOS, iPhone, Chrome and Edge
   KNOWN_MALE:/(google uk english male|microsoft (david|mark|guy|ravi|ryan|eric|andrew|brian|christopher|roger|steffan|thomas|william|james|liam|prabhat|asad|salman|connor|mitchell|luke|ken)|^daniel|^aaron|^rishi|^fred|^alex\b|^arthur|^gordon|^oliver|^tom\b|^reed|^rocko|^eddy|^grandpa)/i,
   FEMALE:/(female|zira|samantha|victoria|karen|susan|hazel|heera|moira|tessa|fiona|serena|aria|jenny|libby|sonia|natasha|catherine|kate|veena|neerja|uzma|gul|emma|ava|allison|zoe|nicky|martha|kathy|flo|grandma|sandy|shelley|google us english|google uk english female)/i,
-  saved(){ try{ return localStorage.getItem(VOICE_KEY); }catch(e){ return null; } },
-  useCloud(){ const p = this.saved(); return CLOUD_VOICE_OK && !this.cloudFailed && (!p || p==='__cloud__'); },
   list(){ return 'speechSynthesis' in window ? speechSynthesis.getVoices().filter(v=>/^en/i.test(v.lang)) : []; },
   isMale(v){ return !!v && this.KNOWN_MALE.test(v.name) && !/female/i.test(v.name); },
   pick(){
     const vs = this.list(); if(!vs.length) return;
-    const p = this.saved(), byName = p && p!=='__cloud__' && vs.find(v=>v.name===p);
+    let saved = null; try{ saved = localStorage.getItem('musaafir-voice'); }catch(e){}
+    const byName = saved && vs.find(v=>v.name===saved);
     if(byName){ this.voice = byName; return; }
     const pref = l => vs.filter(v=>v.lang.replace('_','-').toLowerCase().startsWith(l));
     const pool = [...L.voiceLangs.flatMap(pref), ...vs];
     this.voice = pool.find(v=>this.isMale(v)) || pool.find(v=>!this.FEMALE.test(v.name)) || pool[0] || null;
   },
-  set(name){
-    try{ localStorage.setItem(VOICE_KEY, name); }catch(e){}
-    if(name==='__cloud__'){ this.cloudFailed = false; this.fails = 0; return; }
-    const v = this.list().find(x=>x.name===name); if(v) this.voice = v;
-  },
-  // Phones only allow sound after a tap: prime the player during the tap so later instructions can play.
-  unlock(){
-    if(this.audio) return;
-    this.audio = new Audio(); this.audio.preload = 'auto';
-    try{ this.audio.src = silentWav(); this.audio.play().catch(()=>{}); }catch(e){}
-  },
-  async fetchCloud(text){
-    if(this.cache.has(text)) return this.cache.get(text);
-    for(const name of CLOUD_VOICES){
-      const r = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${encodeURIComponent(GOOGLE_MAPS_KEY)}`, {
-        method:'POST', headers:{ 'Content-Type':'application/json' },
-        body: JSON.stringify({ input:{ text }, voice:{ languageCode:'en-US', name },
-          audioConfig:{ audioEncoding:'MP3', speakingRate:0.95, pitch:-2.0, effectsProfileId:['handset-class-device'] } }) });
-      if(!r.ok){ if(r.status===401 || r.status===403) throw new Error('Voice service not allowed for this key'); continue; }
-      const { audioContent } = await r.json();
-      const url = 'data:audio/mpeg;base64,' + audioContent;
-      if(this.cache.size > 150) this.cache.delete(this.cache.keys().next().value);
-      this.cache.set(text, url);
-      return url;
-    }
-    throw new Error('Voice service unavailable');
-  },
-  async cloudSay(text){
-    this.unlock();
-    const my = ++this.seq; let url;
-    try{ url = await this.fetchCloud(text); this.fails = 0; }
-    catch(e){
-      console.error('Musaafir voice:', e.message);
-      if(++this.fails >= 2 || /not allowed/.test(e.message)) this.cloudFailed = true;   // use the phone's voice from now on
-      if(my === this.seq) this.deviceSay(text);
-      return;
-    }
-    if(my !== this.seq) return;                 // a newer instruction came in meanwhile
-    try{ const a = this.audio; a.pause(); a.src = url; await a.play(); }
-    catch(e){ if(my === this.seq) this.deviceSay(text); }
-  },
+  set(name){ const v = this.list().find(x=>x.name===name); if(v){ this.voice=v; try{ localStorage.setItem('musaafir-voice', name); }catch(e){} } },
   say(text){
-    if(!this.on || !text) return;
-    if(this.useCloud()){ if('speechSynthesis' in window) speechSynthesis.cancel(); this.cloudSay(text); return; }
-    this.deviceSay(text);
-  },
-  deviceSay(text){
-    if(!('speechSynthesis' in window)) return;
+    if(!this.on || !('speechSynthesis' in window) || !text) return;
     if(!this.voice) this.pick();
     const u = new SpeechSynthesisUtterance(text);
     if(this.voice){ u.voice = this.voice; u.lang = this.voice.lang; }
-    u.rate = 0.95; u.pitch = this.isMale(this.voice) ? 0.9 : 0.7;   // deepen the tone when the phone has no known male voice
+    u.rate = 1; u.pitch = this.isMale(this.voice) ? 1 : 0.72;   // deepen the tone when the phone has no known male voice
     speechSynthesis.cancel(); speechSynthesis.speak(u);
   },
 };
 function fillVoices(){
   const sel = $('#navVoice'); if(!sel) return;
   Voice.pick();
-  const vs = Voice.list(), cloud = Voice.useCloud();
-  const top = CLOUD_VOICE_OK ? `<option value="__cloud__" ${cloud?'selected':''}>${L.brand} voice · calm male (recommended)</option>` : '';
-  sel.innerHTML = top + (vs.length ? vs.map(v=>`<option value="${esc(v.name)}" ${!cloud && Voice.voice?.name===v.name?'selected':''}>${esc(v.name.replace(/^(Microsoft|Google) /,''))}${Voice.isMale(v)?' · male':''}</option>`).join('')
-    : (top ? '' : '<option>Phone default voice</option>'));
+  const vs = Voice.list();
+  sel.innerHTML = vs.length ? vs.map(v=>`<option value="${esc(v.name)}" ${Voice.voice?.name===v.name?'selected':''}>${esc(v.name.replace(/^(Microsoft|Google) /,''))}${Voice.isMale(v)?' · male':''}</option>`).join('')
+    : '<option>Phone default voice</option>';
 }
 if('speechSynthesis' in window) speechSynthesis.onvoiceschanged = ()=>{ Voice.pick(); fillVoices(); };
 
@@ -1723,11 +1667,36 @@ const MODE_ORDER = ['car','moto','transit','walk','cycle'];
 const DEMO_SPEED = { car:42, moto:40, transit:24, walk:4.8, cycle:15 };   // km/h, demo estimates only
 const isRoad = m => m==='car' || m==='moto';
 const modeIcon = (m, size=22) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="${MODES[m].icon}"/></svg>`;
-const fmtDist = m => L.navDist(m);
-const sayDist = m => L.navSay(m);
+// ---- Units: miles where the phone is in a miles country (USA, UK and a few others), kilometres everywhere else ----
+const MILE_COUNTRIES = ['US','GB','LR','MM','PR','GU','VI','AS','MP','UM'];
+const MILE_TZ = /^(America\/(New_York|Chicago|Denver|Los_Angeles|Phoenix|Anchorage|Adak|Boise|Detroit|Indiana\/.+|Kentucky\/.+|North_Dakota\/.+|Menominee|Juneau|Sitka|Metlakatla|Yakutat|Nome|Puerto_Rico|St_Thomas)|Pacific\/(Honolulu|Guam|Saipan|Pago_Pago)|Europe\/London|Africa\/Monrovia|Asia\/(Yangon|Rangoon))$/;
+const Units = {
+  country:null,   // set from the phone's location when Google can tell us the country
+  tzMiles(){ try{ return MILE_TZ.test(Intl.DateTimeFormat().resolvedOptions().timeZone || ''); }catch(e){ return false; } },
+  miles(){
+    let pref = null; try{ pref = JSON.parse(localStorage.getItem('musaafir-gps-units')); }catch(e){}
+    if(pref === 'mi') return true; if(pref === 'km') return false;
+    return this.country ? MILE_COUNTRIES.includes(this.country) : this.tzMiles();
+  },
+  async detect(pos){   // look up which country the phone is in (once per session)
+    if(this.country || !G || !pos) return;
+    try{
+      const { Geocoder } = await google.maps.importLibrary('geocoding');
+      const { results } = await new Geocoder().geocode({ location:pos });
+      const c = results?.flatMap(r=>r.address_components||[]).find(a=>a.types?.includes('country'));
+      if(c?.short_name){ const before = this.miles(); this.country = c.short_name; if(before !== this.miles() && N.open){ renderSheet(); renderTabs(); } }
+    }catch(e){}
+  },
+};
+const navDistMi = m => m < 160 ? `${Math.max(50, Math.round(m*3.28084/50)*50)} ft` : `${(m/1609.34).toFixed(m >= 16093 ? 0 : 1)} mi`;
+const navDistKm = m => m >= 1000 ? `${(m/1000).toFixed(m >= 10000 ? 0 : 1)} km` : `${Math.max(10, Math.round(m/10)*10)} m`;
+const fmtDist = m => Units.miles() ? navDistMi(m) : navDistKm(m);
+const sayDist = m => Units.miles()
+  ? (m < 160 ? `${Math.max(50, Math.round(m*3.28084/50)*50)} feet` : `${(m/1609.34).toFixed(1).replace('.0','')} miles`)
+  : (m >= 1000 ? `${(m/1000).toFixed(1).replace('.0','')} kilometres` : `${Math.max(50, Math.round(m/50)*50)} metres`);
 const lc = s => s ? s.charAt(0).toLowerCase()+s.slice(1) : s;
 const fmtDur = min => { min = Math.max(1, Math.round(min)); if(min < 60) return `${min} min`; const h = Math.floor(min/60), m = min%60; return m ? `${h} hr ${m}` : `${h} hr`; };
-const fmtKm = km => L.dist(km, km >= 10 ? 0 : 1);
+const fmtKm = km => { const d = km >= 10 ? 0 : 1; return Units.miles() ? `${(km*0.621371).toFixed(d)} mi` : `${(+km).toFixed(d)} km`; };
 const store = (k, v) => { try{ if(v === undefined){ const x = localStorage.getItem('musaafir-gps-'+k); return x===null ? null : JSON.parse(x); } localStorage.setItem('musaafir-gps-'+k, JSON.stringify(v)); }catch(e){ return null; } };
 const ICONS = {
   pin:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s7-6.3 7-12a7 7 0 0 0-14 0c0 5.7 7 12 7 12Z"/><circle cx="12" cy="10" r="2.5"/></svg>',
@@ -1768,7 +1737,7 @@ const REPORT_MAIN = ['crash','congestion','police','roadworks','lane','object','
 const REPORT_MORE = ['camera','stalled','fog','closed','unsafe'];
 const REPORT_TTL = 3*60*60*1000;   // reports fade after 3 hours
 const NEARBY = [
-  ['gas_station', L.id==='us' ? 'Gas' : 'Petrol'], ['restaurant','Restaurants'], ['cafe','Coffee'], ['supermarket','Groceries'],
+  ['gas_station', 'Fuel'], ['restaurant','Restaurants'], ['cafe','Coffee'], ['supermarket','Groceries'],
   ['electric_vehicle_charging_station','EV charging'], ['parking','Parking'], [L.id==='pk' ? 'mosque' : 'rest_stop', L.id==='pk' ? 'Mosques' : 'Rest stops'],
   ['atm','ATMs'], ['pharmacy','Pharmacies'], ['hospital','Hospitals'],
 ];
@@ -2083,7 +2052,7 @@ async function planRoutes(){
   N.stage = 'overview'; N.loading = true; N.err = ''; N.routes = []; renderTop(); renderSheet(); placeFabs();
   const my = ++N.planSeq;
   if(!G){ await new Promise(r=>setTimeout(r, 250)); if(my!==N.planSeq) return; demoPlan(); N.loading = false; tagRoutes(); pickDefault(); renderSheet(); placeFabs(); showMap(); requestAnimationFrame(()=>demoCamera()); return; }
-  try{ N.origin = N.from.here ? (N.pos = await getPosition()) : { lat:N.from.lat, lng:N.from.lng }; }
+  try{ N.origin = N.from.here ? (N.pos = await getPosition()) : { lat:N.from.lat, lng:N.from.lng }; Units.detect(N.pos || N.origin); }
   catch(e){ N.loading = false; N.err = `${e.message} You can also type a starting point.`; renderSheet(); return; }
   await ensureMap(); showMap(); applyLayers();
   const others = Promise.allSettled(MODE_ORDER.map(m=> m===N.mode ? Promise.resolve(null) : computeWithFallback(routeRequest(N.origin, m, { alts:false, full:false }))));
@@ -2293,7 +2262,6 @@ async function openStreetView(){
 // ---------------------------------------------------------------- navigation
 async function startNav(){
   const r = N.routes[N.sel]; if(!r) return;
-  Voice.unlock();
   if(!N.from.here){ openSheet('steps'); toast('Live navigation starts from your current location. Showing the directions instead.'); return; }
   carMode(); keepAwake();
   N.stage = 'nav'; N.active = true; N.follow = true; N.said = {}; N.offCount = 0; N.alerted = new Set();
@@ -2342,7 +2310,7 @@ function onNavPos(p){
   N.pos = pos; N.heading = heading || 0;
   // speed
   const ms = p.coords.speed;
-  if(Number.isFinite(ms) && ms !== null){ $('#gSpeed').hidden = false; const us = L.id==='us'; $('#gSpeedV').textContent = Math.round(ms * (us ? 2.23694 : 3.6)); $('#gSpeedU').textContent = us ? 'mph' : 'km/h'; }
+  if(Number.isFinite(ms) && ms !== null){ $('#gSpeed').hidden = false; const us = Units.miles(); $('#gSpeedV').textContent = Math.round(ms * (us ? 2.23694 : 3.6)); $('#gSpeedU').textContent = us ? 'mph' : 'km/h'; }
   // car + camera
   if(N.ov.car) N.ov.car.move(pos);
   const turnMap = !N.northUp && MAP_ID;
@@ -2557,7 +2525,7 @@ function openSheet(kind, arg){
       ${TRAVEL_PRAYER_ON ? `<div class="g-sec">Travel prayer</div>
       <label class="g-opt">Show the travel prayer when a journey starts<input type="checkbox" data-dua="dua" ${duaShown()?'checked':''}></label>
       <label class="g-opt">Play the recitation<input type="checkbox" data-dua="duaAudio" ${duaVoiceOn()?'checked':''}></label>` : ''}
-      <div class="g-sec">Units</div><div class="g-msg">${L.id==='us' ? 'Miles and feet' : 'Kilometres and metres'}</div>
+      <div class="g-sec">Distance units</div><div class="g-seg">${[['auto',`Automatic (${(Units.country||Units.tzMiles()) && Units.miles() && !store('units') ? 'miles here' : !store('units') ? 'km here' : 'by location'})`],['km','Kilometres'],['mi','Miles']].map(([k,l])=>`<button type="button" data-units="${k}" aria-pressed="${(store('units')||'auto')===k}">${l}</button>`).join('')}</div>
       <div class="g-msg" style="text-align:center">Musaafir GPS <span class="by-ark">by ARK Group</span></div>`;
   }
   s.innerHTML = html; $('#gModal').hidden = false;
@@ -2572,8 +2540,9 @@ function openSheet(kind, arg){
   s.querySelectorAll('[data-apply]').forEach(b=>b.onclick = ()=>{ closeSheet(); if(N.stage==='nav'){ if(G) reroute(N.pos); } else if(N.to) planRoutes(); });
   s.querySelectorAll('[data-cat]').forEach(b=>b.onclick = ()=>{ openSheet('search', b.dataset.cat); searchAlong(b.dataset.cat); });
   s.querySelectorAll('[data-dua]').forEach(c=>c.onchange = ()=>{ store(c.dataset.dua, c.checked); if(c.dataset.dua==='duaAudio' && !c.checked) stopDuaAudio(); });
+  s.querySelectorAll('[data-units]').forEach(b=>b.onclick = ()=>{ const v = b.dataset.units; if(v==='auto'){ try{ localStorage.removeItem('musaafir-gps-units'); }catch(e){} } else store('units', v); openSheet('settings'); if(N.stage==='overview') renderSheet(); });
   s.querySelectorAll('[data-snd]').forEach(b=>b.onclick = ()=>{ N.sound = b.dataset.snd; store('sound', N.sound); setSoundIcon(); s.querySelectorAll('[data-snd]').forEach(x=>x.setAttribute('aria-pressed', x===b)); });
-  if(kind==='settings'){ fillVoices(); $('#navVoice').onchange = e=>{ Voice.unlock(); Voice.set(e.target.value); Voice.say(L.voiceHello); }; $('#navTest').onclick = ()=>{ Voice.unlock(); Voice.say(L.voiceHello); }; }
+  if(kind==='settings'){ fillVoices(); $('#navVoice').onchange = e=>{ Voice.set(e.target.value); Voice.say(L.voiceHello); }; $('#navTest').onclick = ()=>Voice.say(L.voiceHello); }
 }
 function closeSheet(){ $('#gModal').hidden = true; $('#gMSheet').innerHTML = ''; }
 async function searchAlong(type){
@@ -2638,7 +2607,7 @@ function bindGps(){
     else openSheet(a);
   });
   $('#gLayersBtn').onclick = ()=>openSheet('layers');
-  $('#gLocateBtn').onclick = async ()=>{ try{ N.pos = await getPosition(); if(N.map){ N.map.panTo(N.pos); N.map.setZoom(16); drawMe(); } else toast('Location found.'); }catch(e){ toast(e.message); } };
+  $('#gLocateBtn').onclick = async ()=>{ try{ N.pos = await getPosition(); Units.detect(N.pos); if(N.map){ N.map.panTo(N.pos); N.map.setZoom(16); drawMe(); } else toast('Location found.'); }catch(e){ toast(e.message); } };
   $('#gSvThumb').onclick = openStreetView;
   $('#gSvClose').onclick = ()=>{ $('#gSvFull').hidden = true; $('#gSvFullPano').innerHTML = ''; N.svFull = null; };
   $('#gBackdrop').onclick = closeSheet;
@@ -2776,7 +2745,7 @@ function demoNav(){
     if(Math.abs(f-0.42) < 0.01 && !N.alerted.has('demo-haz')){ N.alerted.add('demo-haz'); const rr = REPORTS.roadworks;
       $('#gAlert').innerHTML = `<span class="g-rep" style="position:static;transform:none;background:${rr.bg};width:26px;height:26px">${repDot('roadworks')}</span>Roadworks reported ahead · ${fmtDist(450)}`; $('#gAlert').hidden = false; setTimeout(()=>$('#gAlert').hidden = true, 8000);
       speak(`Roadworks reported ahead, in ${sayDist(450)}.`, 'alert'); }
-    $('#gSpeed').hidden = false; $('#gSpeedV').textContent = L.id==='us' ? 28 + (t%7) : 45 + (t%9); $('#gSpeedU').textContent = L.id==='us' ? 'mph' : 'km/h';
+    $('#gSpeed').hidden = false; $('#gSpeedV').textContent = Units.miles() ? 28 + (t%7) : 45 + (t%9); $('#gSpeedU').textContent = Units.miles() ? 'mph' : 'km/h';
     demoDraw(); t++;
   }, 300);
 }
