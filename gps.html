@@ -16,7 +16,10 @@
 <script>
   // Miles for the Americas, kilometres everywhere else
   var tz = ''; try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) {}
-  location.replace((tz.indexOf('America/') === 0 ? 'us.html' : 'pk.html') + location.search + '#gps');
+  // United States version: false = hidden (everyone opens the Pakistan version), true = shown.
+  // Keep this the same as MUSAAFIR_SHOW_US in index.html.
+  var SHOW_US = false;
+  location.replace((SHOW_US && tz.indexOf('America/') === 0 ? 'us.html' : 'pk.html') + location.search + '#gps');
 </script>
 </head>
 <body></body>
