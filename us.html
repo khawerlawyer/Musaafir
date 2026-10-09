@@ -420,6 +420,20 @@ body.nav-open{overflow:hidden}
 .g-rep{position:absolute;transform:translate(-50%,-50%);width:30px;height:30px;border-radius:50%;display:grid;place-items:center;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.4);pointer-events:none}
 .g-rep svg{width:18px;height:18px}
 
+/* travel prayer */
+.g-dua{position:absolute;inset:0;z-index:8;display:grid;place-items:center;background:rgba(4,8,14,.6);padding:16px}
+.g-dua-card{width:100%;max-width:460px;display:flex;flex-direction:column;gap:12px;text-align:center;border-radius:24px;padding:20px 20px 18px;
+  background:linear-gradient(#0E1626,#0E1626) padding-box,linear-gradient(135deg,#2ED8B2,#FFD27A,#FFA43A) border-box;border:2px solid transparent;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+.g-dua-top{display:flex;align-items:center;justify-content:space-between}
+.g-dua-k{font-size:12px;font-weight:800;letter-spacing:.2em;text-transform:uppercase;color:#FFD27A}
+.g-dua-ar{margin:4px 0 0;font-family:"Amiri","Noto Naskh Arabic","Geeza Pro","Traditional Arabic",serif;font-size:clamp(24px,7vw,32px);line-height:1.9;color:#fff}
+.g-dua-tr{margin:0;font-style:italic;color:#CFE9E2;font-size:15px;line-height:1.5}
+.g-dua-en{margin:0;color:#C9D2DF;font-size:15px;line-height:1.5}
+.g-dua-ur{margin:0;font-family:"Noto Nastaliq Urdu","Jameel Noori Nastaleeq","Urdu Typesetting",serif;font-size:18px;line-height:2.2;color:#E6ECF5}
+.g-dua-ref{font-size:12px;color:#8C98AB}
+.g-dua .g-round svg{width:20px;height:20px}
+.g-dua-card .playing{color:#2ED8B2}
+
 /* arrival */
 .g-arrived{position:absolute;inset:0;z-index:8;display:grid;place-items:end center;background:rgba(0,0,0,.35);padding:16px}
 .g-arrived-card{width:100%;max-width:440px;background:var(--g-bg);border-radius:22px;padding:22px;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;margin-bottom:env(safe-area-inset-bottom,0px)}
@@ -588,6 +602,19 @@ body.nav-open{overflow:hidden}
       <div class="g-arrived-pin"><svg viewBox="0 0 24 24"><path d="M12 22s7-6.3 7-12a7 7 0 0 0-14 0c0 5.7 7 12 7 12Z"/><circle cx="12" cy="10" r="2.6" class="hole"/></svg></div>
       <b>You've arrived</b><span id="gArrivedName"></span>
       <button class="g-btn primary" id="gArrivedDone" type="button">Done</button>
+    </div>
+  </div>
+
+  <!-- Travel prayer (Qur'an 43:13–14), shown and recited when a journey starts -->
+  <div class="g-dua" id="gDua" hidden role="dialog" aria-label="Travel prayer">
+    <div class="g-dua-card">
+      <div class="g-dua-top"><span class="g-dua-k">Travel prayer</span><button class="g-round" id="gDuaMute" type="button" aria-label="Mute recitation"></button></div>
+      <p class="g-dua-ar" lang="ar" dir="rtl">سُبْحَانَ الَّذِي سَخَّرَ لَنَا هَٰذَا وَمَا كُنَّا لَهُ مُقْرِنِينَ<br>وَإِنَّا إِلَىٰ رَبِّنَا لَمُنقَلِبُونَ</p>
+      <p class="g-dua-tr">Subḥāna-lladhī sakhkhara lanā hādhā wa mā kunnā lahū muqrinīn, wa innā ilā rabbinā la-munqalibūn.</p>
+      <p class="g-dua-en">Glory be to the One who has placed this at our service, for we could not have done it ourselves. And to our Lord we will surely return.</p>
+      <p class="g-dua-ur" lang="ur" dir="rtl" hidden>پاک ہے وہ ذات جس نے اس سواری کو ہمارے قابو میں کر دیا، ہم خود اسے قابو میں نہیں لا سکتے تھے، اور بے شک ہم اپنے رب کی طرف لوٹنے والے ہیں۔</p>
+      <div class="g-dua-ref" id="gDuaRef">Qur'an 43:13–14 · Surah Az-Zukhruf · Recited by Mishary Alafasy</div>
+      <button class="g-btn primary wide" id="gDuaOk" type="button">Ameen</button>
     </div>
   </div>
 
@@ -1636,11 +1663,36 @@ const MODE_ORDER = ['car','moto','transit','walk','cycle'];
 const DEMO_SPEED = { car:42, moto:40, transit:24, walk:4.8, cycle:15 };   // km/h, demo estimates only
 const isRoad = m => m==='car' || m==='moto';
 const modeIcon = (m, size=22) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="${MODES[m].icon}"/></svg>`;
-const fmtDist = m => L.navDist(m);
-const sayDist = m => L.navSay(m);
+// ---- Units: miles where the phone is in a miles country (USA, UK and a few others), kilometres everywhere else ----
+const MILE_COUNTRIES = ['US','GB','LR','MM','PR','GU','VI','AS','MP','UM'];
+const MILE_TZ = /^(America\/(New_York|Chicago|Denver|Los_Angeles|Phoenix|Anchorage|Adak|Boise|Detroit|Indiana\/.+|Kentucky\/.+|North_Dakota\/.+|Menominee|Juneau|Sitka|Metlakatla|Yakutat|Nome|Puerto_Rico|St_Thomas)|Pacific\/(Honolulu|Guam|Saipan|Pago_Pago)|Europe\/London|Africa\/Monrovia|Asia\/(Yangon|Rangoon))$/;
+const Units = {
+  country:null,   // set from the phone's location when Google can tell us the country
+  tzMiles(){ try{ return MILE_TZ.test(Intl.DateTimeFormat().resolvedOptions().timeZone || ''); }catch(e){ return false; } },
+  miles(){
+    let pref = null; try{ pref = JSON.parse(localStorage.getItem('musaafir-gps-units')); }catch(e){}
+    if(pref === 'mi') return true; if(pref === 'km') return false;
+    return this.country ? MILE_COUNTRIES.includes(this.country) : this.tzMiles();
+  },
+  async detect(pos){   // look up which country the phone is in (once per session)
+    if(this.country || !G || !pos) return;
+    try{
+      const { Geocoder } = await google.maps.importLibrary('geocoding');
+      const { results } = await new Geocoder().geocode({ location:pos });
+      const c = results?.flatMap(r=>r.address_components||[]).find(a=>a.types?.includes('country'));
+      if(c?.short_name){ const before = this.miles(); this.country = c.short_name; if(before !== this.miles() && N.open){ renderSheet(); renderTabs(); } }
+    }catch(e){}
+  },
+};
+const navDistMi = m => m < 160 ? `${Math.max(50, Math.round(m*3.28084/50)*50)} ft` : `${(m/1609.34).toFixed(m >= 16093 ? 0 : 1)} mi`;
+const navDistKm = m => m >= 1000 ? `${(m/1000).toFixed(m >= 10000 ? 0 : 1)} km` : `${Math.max(10, Math.round(m/10)*10)} m`;
+const fmtDist = m => Units.miles() ? navDistMi(m) : navDistKm(m);
+const sayDist = m => Units.miles()
+  ? (m < 160 ? `${Math.max(50, Math.round(m*3.28084/50)*50)} feet` : `${(m/1609.34).toFixed(1).replace('.0','')} miles`)
+  : (m >= 1000 ? `${(m/1000).toFixed(1).replace('.0','')} kilometres` : `${Math.max(50, Math.round(m/50)*50)} metres`);
 const lc = s => s ? s.charAt(0).toLowerCase()+s.slice(1) : s;
 const fmtDur = min => { min = Math.max(1, Math.round(min)); if(min < 60) return `${min} min`; const h = Math.floor(min/60), m = min%60; return m ? `${h} hr ${m}` : `${h} hr`; };
-const fmtKm = km => L.dist(km, km >= 10 ? 0 : 1);
+const fmtKm = km => { const d = km >= 10 ? 0 : 1; return Units.miles() ? `${(km*0.621371).toFixed(d)} mi` : `${(+km).toFixed(d)} km`; };
 const store = (k, v) => { try{ if(v === undefined){ const x = localStorage.getItem('musaafir-gps-'+k); return x===null ? null : JSON.parse(x); } localStorage.setItem('musaafir-gps-'+k, JSON.stringify(v)); }catch(e){ return null; } };
 const ICONS = {
   pin:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s7-6.3 7-12a7 7 0 0 0-14 0c0 5.7 7 12 7 12Z"/><circle cx="12" cy="10" r="2.5"/></svg>',
@@ -1681,7 +1733,7 @@ const REPORT_MAIN = ['crash','congestion','police','roadworks','lane','object','
 const REPORT_MORE = ['camera','stalled','fog','closed','unsafe'];
 const REPORT_TTL = 3*60*60*1000;   // reports fade after 3 hours
 const NEARBY = [
-  ['gas_station', L.id==='us' ? 'Gas' : 'Petrol'], ['restaurant','Restaurants'], ['cafe','Coffee'], ['supermarket','Groceries'],
+  ['gas_station', 'Fuel'], ['restaurant','Restaurants'], ['cafe','Coffee'], ['supermarket','Groceries'],
   ['electric_vehicle_charging_station','EV charging'], ['parking','Parking'], [L.id==='pk' ? 'mosque' : 'rest_stop', L.id==='pk' ? 'Mosques' : 'Rest stops'],
   ['atm','ATMs'], ['pharmacy','Pharmacies'], ['hospital','Hospitals'],
 ];
@@ -1726,8 +1778,46 @@ DEMO_TRIPS.moto = DEMO_TRIPS.car; DEMO_TRIPS.cycle = DEMO_TRIPS.walk;
 // ---------------------------------------------------------------- voice
 function speak(text, kind='nav'){
   if(N.sound === 'off') return;
+  if(duaPlaying() && kind === 'nav') return;   // don't talk over the travel prayer
   if(N.sound === 'alerts' && kind === 'nav') return;
   Voice.say(text);
+}
+
+// ---------------------------------------------------------------- travel prayer
+// Qur'an 43:13–14 recited by Mishary Alafasy (via the Islamic Network Qur'an audio service)
+const TRAVEL_PRAYER_ON = false;   // travel prayer at the start of a journey: false = off for now, true = on
+const DUA_AUDIO = [4338, 4339].map(n=>[`https://cdn.islamic.network/quran/audio/128/ar.alafasy/${n}.mp3`, `https://cdn.islamic.network/quran/audio/64/ar.alafasy/${n}.mp3`]);
+const Dua = { audio:null, done:null, timer:null, seq:0 };
+const duaShown = ()=>store('dua') !== false;
+const duaVoiceOn = ()=>store('duaAudio') !== false;
+const duaPlaying = ()=>!$('#gDua').hidden;   // the prayer card is on screen
+const MUTE_SVG = on=>`<svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9Z" fill="currentColor" stroke="none"/>${on ? '<path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' : '<path d="m16 9 5 6M21 9l-5 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'}</svg>`;
+function setDuaMute(){
+  const on = duaVoiceOn() && N.sound !== 'off', b = $('#gDuaMute');
+  b.innerHTML = MUTE_SVG(on); b.classList.toggle('playing', on);
+  b.setAttribute('aria-label', on ? 'Mute recitation' : 'Play recitation');
+}
+function showDua(then){
+  if(!TRAVEL_PRAYER_ON || !duaShown()){ then(); return; }
+  Dua.done = then; $('#gDua').hidden = false; $('#gDua .g-dua-ur').hidden = L.id !== 'pk';
+  setDuaMute();
+  if(duaVoiceOn() && N.sound !== 'off') playDua(0); else { clearTimeout(Dua.timer); Dua.timer = setTimeout(closeDua, 15000); }
+}
+function playDua(i){
+  const my = ++Dua.seq; clearTimeout(Dua.timer);
+  if(i >= DUA_AUDIO.length){ Dua.timer = setTimeout(closeDua, 1500); return; }
+  if(!Dua.audio){ Dua.audio = new Audio(); Dua.audio.preload = 'auto'; }
+  const a = Dua.audio; let alt = 0;
+  a.onended = ()=>{ if(my===Dua.seq) playDua(i+1); };
+  a.onerror = ()=>{ if(my!==Dua.seq) return; if(alt===0){ alt = 1; a.src = DUA_AUDIO[i][1]; a.play().catch(()=>{}); } else playDua(i+1); };
+  a.src = DUA_AUDIO[i][0];
+  a.play().catch(()=>{ if(my===Dua.seq && a.paused){ Dua.timer = setTimeout(closeDua, 15000); } });
+}
+function stopDuaAudio(){ Dua.seq++; if(Dua.audio){ Dua.audio.pause(); } }
+function closeDua(){
+  clearTimeout(Dua.timer); stopDuaAudio();
+  if($('#gDua').hidden) return;
+  $('#gDua').hidden = true; const f = Dua.done; Dua.done = null; if(f) f();
 }
 
 // ---------------------------------------------------------------- state
@@ -1958,7 +2048,7 @@ async function planRoutes(){
   N.stage = 'overview'; N.loading = true; N.err = ''; N.routes = []; renderTop(); renderSheet(); placeFabs();
   const my = ++N.planSeq;
   if(!G){ await new Promise(r=>setTimeout(r, 250)); if(my!==N.planSeq) return; demoPlan(); N.loading = false; tagRoutes(); pickDefault(); renderSheet(); placeFabs(); showMap(); requestAnimationFrame(()=>demoCamera()); return; }
-  try{ N.origin = N.from.here ? (N.pos = await getPosition()) : { lat:N.from.lat, lng:N.from.lng }; }
+  try{ N.origin = N.from.here ? (N.pos = await getPosition()) : { lat:N.from.lat, lng:N.from.lng }; Units.detect(N.pos || N.origin); }
   catch(e){ N.loading = false; N.err = `${e.message} You can also type a starting point.`; renderSheet(); return; }
   await ensureMap(); showMap(); applyLayers();
   const others = Promise.allSettled(MODE_ORDER.map(m=> m===N.mode ? Promise.resolve(null) : computeWithFallback(routeRequest(N.origin, m, { alts:false, full:false }))));
@@ -2179,7 +2269,8 @@ async function startNav(){
   setSoundIcon(); setCompass();
   addRecent(N.to);
   const how = isRoad(N.mode) && N.routes.length>1 ? (r.tags.includes('fast') ? ', on the fastest route' : r.tags.includes('safe') ? ', on the Musaafir safest route' : r.tags.includes('eco') ? ', on the fuel-efficient route' : '') : (isRoad(N.mode) ? '' : ` by ${MODES[N.mode].label.toLowerCase()}`);
-  speak(`Starting ${L.brand} navigation to ${N.to.name}${how}. ${r.steps[0]?.text||''}`);
+  const firstText = r.steps[0]?.text || '';
+  showDua(()=>{ if(N.stage==='nav') speak(`Starting ${L.brand} navigation to ${N.to.name}${how}. ${firstText}`); });
   if(!G){ demoNav(); return; }
   clearOverlays();
   drawNavRoute();
@@ -2215,7 +2306,7 @@ function onNavPos(p){
   N.pos = pos; N.heading = heading || 0;
   // speed
   const ms = p.coords.speed;
-  if(Number.isFinite(ms) && ms !== null){ $('#gSpeed').hidden = false; const us = L.id==='us'; $('#gSpeedV').textContent = Math.round(ms * (us ? 2.23694 : 3.6)); $('#gSpeedU').textContent = us ? 'mph' : 'km/h'; }
+  if(Number.isFinite(ms) && ms !== null){ $('#gSpeed').hidden = false; const us = Units.miles(); $('#gSpeedV').textContent = Math.round(ms * (us ? 2.23694 : 3.6)); $('#gSpeedU').textContent = us ? 'mph' : 'km/h'; }
   // car + camera
   if(N.ov.car) N.ov.car.move(pos);
   const turnMap = !N.northUp && MAP_ID;
@@ -2329,6 +2420,7 @@ function stopWatch(){
 function endNav(silent){
   if(N.stage !== 'nav') return;
   N.active = false; stopWatch(); exitCarMode();
+  Dua.done = null; closeDua();
   if('speechSynthesis' in window) speechSynthesis.cancel();
   $('#gNavUI').hidden = true; $('#gArrived').hidden = true; $('#gSpeed').hidden = true; $('#gRecenter').hidden = true; $('#gAlert').hidden = true;
   if(N.ov.car){ N.ov.car.setMap(null); N.ov.car = null; }
@@ -2426,7 +2518,10 @@ function openSheet(kind, arg){
       <div class="g-sec">Navigation voice</div>
       <div class="g-voice"><select id="navVoice" aria-label="Navigation voice"></select><button class="g-btn" type="button" id="navTest">Test</button></div>
       <div class="g-sec">Sound</div><div class="g-seg">${[['on','Unmuted'],['alerts','Alerts only'],['off','Muted']].map(([k,l])=>`<button type="button" data-snd="${k}" aria-pressed="${N.sound===k}">${l}</button>`).join('')}</div>
-      <div class="g-sec">Units</div><div class="g-msg">${L.id==='us' ? 'Miles and feet' : 'Kilometres and metres'}</div>
+      ${TRAVEL_PRAYER_ON ? `<div class="g-sec">Travel prayer</div>
+      <label class="g-opt">Show the travel prayer when a journey starts<input type="checkbox" data-dua="dua" ${duaShown()?'checked':''}></label>
+      <label class="g-opt">Play the recitation<input type="checkbox" data-dua="duaAudio" ${duaVoiceOn()?'checked':''}></label>` : ''}
+      <div class="g-sec">Distance units</div><div class="g-seg">${[['auto',`Automatic (${(Units.country||Units.tzMiles()) && Units.miles() && !store('units') ? 'miles here' : !store('units') ? 'km here' : 'by location'})`],['km','Kilometres'],['mi','Miles']].map(([k,l])=>`<button type="button" data-units="${k}" aria-pressed="${(store('units')||'auto')===k}">${l}</button>`).join('')}</div>
       <div class="g-msg" style="text-align:center">Musaafir GPS <span class="by-ark">by ARK Group</span></div>`;
   }
   s.innerHTML = html; $('#gModal').hidden = false;
@@ -2440,6 +2535,8 @@ function openSheet(kind, arg){
   s.querySelectorAll('[data-tpref]').forEach(b=>b.onclick = ()=>{ N.transitPref = b.dataset.tpref; s.querySelectorAll('[data-tpref]').forEach(x=>x.setAttribute('aria-pressed', x===b)); });
   s.querySelectorAll('[data-apply]').forEach(b=>b.onclick = ()=>{ closeSheet(); if(N.stage==='nav'){ if(G) reroute(N.pos); } else if(N.to) planRoutes(); });
   s.querySelectorAll('[data-cat]').forEach(b=>b.onclick = ()=>{ openSheet('search', b.dataset.cat); searchAlong(b.dataset.cat); });
+  s.querySelectorAll('[data-dua]').forEach(c=>c.onchange = ()=>{ store(c.dataset.dua, c.checked); if(c.dataset.dua==='duaAudio' && !c.checked) stopDuaAudio(); });
+  s.querySelectorAll('[data-units]').forEach(b=>b.onclick = ()=>{ const v = b.dataset.units; if(v==='auto'){ try{ localStorage.removeItem('musaafir-gps-units'); }catch(e){} } else store('units', v); openSheet('settings'); if(N.stage==='overview') renderSheet(); });
   s.querySelectorAll('[data-snd]').forEach(b=>b.onclick = ()=>{ N.sound = b.dataset.snd; store('sound', N.sound); setSoundIcon(); s.querySelectorAll('[data-snd]').forEach(x=>x.setAttribute('aria-pressed', x===b)); });
   if(kind==='settings'){ fillVoices(); $('#navVoice').onchange = e=>{ Voice.set(e.target.value); Voice.say(L.voiceHello); }; $('#navTest').onclick = ()=>Voice.say(L.voiceHello); }
 }
@@ -2506,7 +2603,7 @@ function bindGps(){
     else openSheet(a);
   });
   $('#gLayersBtn').onclick = ()=>openSheet('layers');
-  $('#gLocateBtn').onclick = async ()=>{ try{ N.pos = await getPosition(); if(N.map){ N.map.panTo(N.pos); N.map.setZoom(16); drawMe(); } else toast('Location found.'); }catch(e){ toast(e.message); } };
+  $('#gLocateBtn').onclick = async ()=>{ try{ N.pos = await getPosition(); Units.detect(N.pos); if(N.map){ N.map.panTo(N.pos); N.map.setZoom(16); drawMe(); } else toast('Location found.'); }catch(e){ toast(e.message); } };
   $('#gSvThumb').onclick = openStreetView;
   $('#gSvClose').onclick = ()=>{ $('#gSvFull').hidden = true; $('#gSvFullPano').innerHTML = ''; N.svFull = null; };
   $('#gBackdrop').onclick = closeSheet;
@@ -2514,6 +2611,14 @@ function bindGps(){
   $('#gExit').onclick = ()=>endNav(false);
   $('#gArrivedDone').onclick = ()=>{ endNav(true); N.to = null; N.stops = []; goHome(); };
   $('#gReport').onclick = ()=>openSheet('report');
+  $('#gDuaOk').onclick = closeDua;
+  $('#gDuaMute').onclick = ()=>{
+    const on = !(duaVoiceOn() && N.sound !== 'off');
+    store('duaAudio', on);
+    if(on){ if(N.sound==='off'){ N.sound = 'on'; store('sound','on'); setSoundIcon(); } playDua(0); }
+    else { stopDuaAudio(); clearTimeout(Dua.timer); Dua.timer = setTimeout(closeDua, 12000); toast('Recitation muted. Turn it back on any time in Voice and settings.'); }
+    setDuaMute();
+  };
   $('#gSearchRoute').onclick = ()=>openSheet('search');
   $('#gRouteOpts').onclick = ()=>{ openSheet('options'); if(G && N.pos){ N.lastAltCheck = Date.now(); checkAlternatives(N.pos, N.remMin||N.totalMin); } };
   $('#gShareTrip').onclick = shareTrip;
@@ -2636,7 +2741,7 @@ function demoNav(){
     if(Math.abs(f-0.42) < 0.01 && !N.alerted.has('demo-haz')){ N.alerted.add('demo-haz'); const rr = REPORTS.roadworks;
       $('#gAlert').innerHTML = `<span class="g-rep" style="position:static;transform:none;background:${rr.bg};width:26px;height:26px">${repDot('roadworks')}</span>Roadworks reported ahead · ${fmtDist(450)}`; $('#gAlert').hidden = false; setTimeout(()=>$('#gAlert').hidden = true, 8000);
       speak(`Roadworks reported ahead, in ${sayDist(450)}.`, 'alert'); }
-    $('#gSpeed').hidden = false; $('#gSpeedV').textContent = L.id==='us' ? 28 + (t%7) : 45 + (t%9); $('#gSpeedU').textContent = L.id==='us' ? 'mph' : 'km/h';
+    $('#gSpeed').hidden = false; $('#gSpeedV').textContent = Units.miles() ? 28 + (t%7) : 45 + (t%9); $('#gSpeedU').textContent = Units.miles() ? 'mph' : 'km/h';
     demoDraw(); t++;
   }, 300);
 }
