@@ -16,7 +16,7 @@
 <script>
   // Miles for the Americas, kilometres everywhere else
   var tz = ''; try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) {}
-  location.replace((tz.indexOf('America/') === 0 ? 'us.html' : 'pk.html') + '#gps');
+  location.replace((tz.indexOf('America/') === 0 ? 'us.html' : 'pk.html') + location.search + '#gps');
 </script>
 </head>
 <body></body>
