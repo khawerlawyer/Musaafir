@@ -415,10 +415,8 @@ body.nav-open{overflow:hidden}
 .g-me{position:absolute;transform:translate(-50%,-50%);width:22px;height:22px;border-radius:50%;background:#4D8DFF;border:3px solid #fff;box-shadow:0 0 0 8px rgba(77,141,255,.22);pointer-events:none}
 .g-odot{position:absolute;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;background:#fff;border:4px solid #1A2233;pointer-events:none}
 .g-snum{position:absolute;transform:translate(-50%,-50%);width:22px;height:22px;border-radius:50%;background:#fff;color:#111;font-weight:800;font-size:12px;display:grid;place-items:center;border:2px solid #1A2233;pointer-events:none}
-.g-car{position:absolute;width:88px;height:96px;transform:translate(-50%,-62%);pointer-events:none;display:flex;flex-direction:column;align-items:center}
-.g-car img{width:88px;height:auto;display:block;filter:drop-shadow(0 6px 6px rgba(0,0,0,.45));position:relative;z-index:1}
-.g-car .hd{width:0;height:0;margin-top:-6px;border-left:9px solid transparent;border-right:9px solid transparent;border-bottom:16px solid #2ED8B2;transform-origin:50% 100%;transition:transform .5s linear;filter:drop-shadow(0 1px 2px rgba(0,0,0,.6))}
-.g-car .hd.off{visibility:hidden}
+.g-car{position:absolute;width:52px;height:42px;transform:translate(-50%,-50%);pointer-events:none}
+.g-car img{width:52px;height:auto;display:block;filter:drop-shadow(0 4px 4px rgba(0,0,0,.5));transform-origin:50% 50%;transition:transform .5s linear}
 .g-rep{position:absolute;transform:translate(-50%,-50%);width:30px;height:30px;border-radius:50%;display:grid;place-items:center;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.4);pointer-events:none}
 .g-rep svg{width:18px;height:18px}
 
@@ -1914,7 +1912,7 @@ function drawMe(){
   if(N.ov.me) N.ov.me.move(N.pos); else N.ov.me = overlay(N.pos, el('g-me'), 3);
 }
 const PIN_SVG = '<svg viewBox="0 0 30 40"><path d="M15 39s13-12 13-24A13 13 0 0 0 2 15c0 12 13 24 13 24Z" fill="#E5484D" stroke="#fff" stroke-width="2"/><circle cx="15" cy="15" r="5" fill="#fff"/></svg>';
-const carHtml = ()=>`<img src="${$('#gCarSrc')?.getAttribute('src')||''}" alt=""><span class="hd"></span>`;
+const carHtml = ()=>`<img src="${$('#gCarSrc')?.getAttribute('src')||''}" alt="">`;
 const CAR_SVG = '<svg viewBox="0 0 54 54"><ellipse cx="27" cy="30" rx="15" ry="19" fill="rgba(0,0,0,.25)"/><rect x="15" y="9" width="24" height="36" rx="9" fill="#3D7BFF" stroke="#fff" stroke-width="2.5"/><path d="M18 19q9-6 18 0v6H18Z" fill="#BFD6FF"/><rect x="18" y="34" width="18" height="6" rx="2.5" fill="#BFD6FF"/></svg>';
 
 // ---------------------------------------------------------------- top card
@@ -2319,8 +2317,8 @@ function onNavPos(p){
   if(N.ov.car) N.ov.car.move(pos);
   const turnMap = !N.northUp && MAP_ID;
   const carRot = turnMap ? 0 : N.heading;
-  // the car always faces away from you; the small arrow under it shows the direction of travel on a north-up map
-  const hd = N.ov.car?.e?.querySelector('.hd'); if(hd){ hd.style.transform = `rotate(${carRot}deg)`; hd.classList.toggle('off', !!turnMap); }
+  // turn the car so it faces along the road (the photo shows its rear, so "up" in the picture is forward)
+  const ci = N.ov.car?.e?.querySelector('img'); if(ci) ci.style.transform = `rotate(${carRot}deg)`;
   if(N.follow && N.map){
     const zoom = !Number.isFinite(ms) || ms===null ? 18 : ms > 25 ? 16 : ms > 14 ? 17 : 18;
     try{ N.map.moveCamera({ center:pos, zoom, heading:turnMap ? N.heading : 0, tilt:turnMap ? 50 : 0 }); }catch(e){ N.map.panTo(pos); }
@@ -2699,9 +2697,7 @@ function demoDraw(){
   if(N.stage==='nav' && N.demoCar){
     const src = $('#gCarSrc')?.getAttribute('src') || '';
     bubbles += `<g transform="translate(${N.demoCar.x} ${N.demoCar.y}) rotate(${-demoT.rot}) scale(${1/demoT.s})">`
-      + `<ellipse cx="0" cy="24" rx="38" ry="8" fill="rgba(0,0,0,.35)"/><image href="${src}" x="-44" y="-48" width="88" height="71"/>`
-      + (N.northUp ? `<g transform="translate(0 40) rotate(${N.demoCar.a})"><path d="M0 -11 L9 7 L0 3 L-9 7Z" fill="#2ED8B2" stroke="#0B1220" stroke-width="1.5" stroke-linejoin="round"/></g>` : '')
-      + `</g>`;
+      + `<g transform="rotate(${N.demoCar.a + demoT.rot})"><ellipse cx="0" cy="12" rx="24" ry="6" fill="rgba(0,0,0,.35)"/><image href="${src}" x="-26" y="-21" width="52" height="42"/></g></g>`;
   }
   if(N.stage==='nav' && N.demoCallout) bubbles += `<g transform="translate(${N.demoCallout.x} ${N.demoCallout.y}) rotate(${-demoT.rot}) scale(${1/demoT.s})"><rect x="${-N.demoCallout.t.length*5.2-12}" y="-44" width="${N.demoCallout.t.length*10.4+24}" height="32" rx="8" fill="#2B3DE0"/><text x="0" y="-22" text-anchor="middle" font-family="Figtree, sans-serif" font-weight="800" font-size="16" fill="#fff">${esc(N.demoCallout.t)}</text></g>`;
   $('#gDyn').innerHTML = world + bubbles;
