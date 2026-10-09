@@ -1615,38 +1615,94 @@ function render(){ renderHeader(); renderPanel(); renderMap(); }
 /* =========================================================
    MUSAAFIR GPS — turn-by-turn navigation with a male voice
    ========================================================= */
+// Navigation voice. First choice: Google's natural, calm male voice (same on every phone).
+// Fallback: the phone's own voice, preferring a male one.
+const CLOUD_VOICE_OK = !!GOOGLE_MAPS_KEY;   // uses the Google key; needs Cloud Text-to-Speech API switched on for that key
+const CLOUD_VOICES = ['en-US-Neural2-J', 'en-US-Neural2-D', 'en-US-Wavenet-D', 'en-US-Standard-B'];   // calm American male voices, best first
+const VOICE_KEY = 'musaafir-voice2';
+function silentWav(){ const n=800, b=new ArrayBuffer(44+n), v=new DataView(b), w=(o,t)=>[...t].forEach((c,i)=>v.setUint8(o+i,c.charCodeAt(0)));
+  w(0,'RIFF'); v.setUint32(4,36+n,true); w(8,'WAVE'); w(12,'fmt '); v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+  v.setUint32(24,8000,true); v.setUint32(28,8000,true); v.setUint16(32,1,true); v.setUint16(34,8,true); w(36,'data'); v.setUint32(40,n,true);
+  for(let i=0;i<n;i++) v.setUint8(44+i,128); return URL.createObjectURL(new Blob([b],{type:'audio/wav'})); }
 const Voice = {
-  on:true, voice:null, chosen:null,
+  on:true, voice:null, audio:null, cloudFailed:false, fails:0, cache:new Map(), seq:0,
   // Voices known to be male on Windows, macOS, iPhone, Chrome and Edge
   KNOWN_MALE:/(google uk english male|microsoft (david|mark|guy|ravi|ryan|eric|andrew|brian|christopher|roger|steffan|thomas|william|james|liam|prabhat|asad|salman|connor|mitchell|luke|ken)|^daniel|^aaron|^rishi|^fred|^alex\b|^arthur|^gordon|^oliver|^tom\b|^reed|^rocko|^eddy|^grandpa)/i,
   FEMALE:/(female|zira|samantha|victoria|karen|susan|hazel|heera|moira|tessa|fiona|serena|aria|jenny|libby|sonia|natasha|catherine|kate|veena|neerja|uzma|gul|emma|ava|allison|zoe|nicky|martha|kathy|flo|grandma|sandy|shelley|google us english|google uk english female)/i,
+  saved(){ try{ return localStorage.getItem(VOICE_KEY); }catch(e){ return null; } },
+  useCloud(){ const p = this.saved(); return CLOUD_VOICE_OK && !this.cloudFailed && (!p || p==='__cloud__'); },
   list(){ return 'speechSynthesis' in window ? speechSynthesis.getVoices().filter(v=>/^en/i.test(v.lang)) : []; },
   isMale(v){ return !!v && this.KNOWN_MALE.test(v.name) && !/female/i.test(v.name); },
   pick(){
     const vs = this.list(); if(!vs.length) return;
-    let saved = null; try{ saved = localStorage.getItem('musaafir-voice'); }catch(e){}
-    const byName = saved && vs.find(v=>v.name===saved);
+    const p = this.saved(), byName = p && p!=='__cloud__' && vs.find(v=>v.name===p);
     if(byName){ this.voice = byName; return; }
     const pref = l => vs.filter(v=>v.lang.replace('_','-').toLowerCase().startsWith(l));
     const pool = [...L.voiceLangs.flatMap(pref), ...vs];
     this.voice = pool.find(v=>this.isMale(v)) || pool.find(v=>!this.FEMALE.test(v.name)) || pool[0] || null;
   },
-  set(name){ const v = this.list().find(x=>x.name===name); if(v){ this.voice=v; try{ localStorage.setItem('musaafir-voice', name); }catch(e){} } },
+  set(name){
+    try{ localStorage.setItem(VOICE_KEY, name); }catch(e){}
+    if(name==='__cloud__'){ this.cloudFailed = false; this.fails = 0; return; }
+    const v = this.list().find(x=>x.name===name); if(v) this.voice = v;
+  },
+  // Phones only allow sound after a tap: prime the player during the tap so later instructions can play.
+  unlock(){
+    if(this.audio) return;
+    this.audio = new Audio(); this.audio.preload = 'auto';
+    try{ this.audio.src = silentWav(); this.audio.play().catch(()=>{}); }catch(e){}
+  },
+  async fetchCloud(text){
+    if(this.cache.has(text)) return this.cache.get(text);
+    for(const name of CLOUD_VOICES){
+      const r = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${encodeURIComponent(GOOGLE_MAPS_KEY)}`, {
+        method:'POST', headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({ input:{ text }, voice:{ languageCode:'en-US', name },
+          audioConfig:{ audioEncoding:'MP3', speakingRate:0.95, pitch:-2.0, effectsProfileId:['handset-class-device'] } }) });
+      if(!r.ok){ if(r.status===401 || r.status===403) throw new Error('Voice service not allowed for this key'); continue; }
+      const { audioContent } = await r.json();
+      const url = 'data:audio/mpeg;base64,' + audioContent;
+      if(this.cache.size > 150) this.cache.delete(this.cache.keys().next().value);
+      this.cache.set(text, url);
+      return url;
+    }
+    throw new Error('Voice service unavailable');
+  },
+  async cloudSay(text){
+    this.unlock();
+    const my = ++this.seq; let url;
+    try{ url = await this.fetchCloud(text); this.fails = 0; }
+    catch(e){
+      console.error('Musaafir voice:', e.message);
+      if(++this.fails >= 2 || /not allowed/.test(e.message)) this.cloudFailed = true;   // use the phone's voice from now on
+      if(my === this.seq) this.deviceSay(text);
+      return;
+    }
+    if(my !== this.seq) return;                 // a newer instruction came in meanwhile
+    try{ const a = this.audio; a.pause(); a.src = url; await a.play(); }
+    catch(e){ if(my === this.seq) this.deviceSay(text); }
+  },
   say(text){
-    if(!this.on || !('speechSynthesis' in window) || !text) return;
+    if(!this.on || !text) return;
+    if(this.useCloud()){ if('speechSynthesis' in window) speechSynthesis.cancel(); this.cloudSay(text); return; }
+    this.deviceSay(text);
+  },
+  deviceSay(text){
+    if(!('speechSynthesis' in window)) return;
     if(!this.voice) this.pick();
     const u = new SpeechSynthesisUtterance(text);
     if(this.voice){ u.voice = this.voice; u.lang = this.voice.lang; }
-    u.rate = 1; u.pitch = this.isMale(this.voice) ? 1 : 0.72;   // deepen the tone when the phone has no known male voice
+    u.rate = 0.95; u.pitch = this.isMale(this.voice) ? 0.9 : 0.7;   // deepen the tone when the phone has no known male voice
     speechSynthesis.cancel(); speechSynthesis.speak(u);
   },
 };
 function fillVoices(){
   const sel = $('#navVoice'); if(!sel) return;
   Voice.pick();
-  const vs = Voice.list();
-  sel.innerHTML = vs.length ? vs.map(v=>`<option value="${esc(v.name)}" ${Voice.voice?.name===v.name?'selected':''}>${esc(v.name.replace(/^(Microsoft|Google) /,''))}${Voice.isMale(v)?' · male':''}</option>`).join('')
-    : '<option>Phone default voice</option>';
+  const vs = Voice.list(), cloud = Voice.useCloud();
+  const top = CLOUD_VOICE_OK ? `<option value="__cloud__" ${cloud?'selected':''}>${L.brand} voice · calm male (recommended)</option>` : '';
+  sel.innerHTML = top + (vs.length ? vs.map(v=>`<option value="${esc(v.name)}" ${!cloud && Voice.voice?.name===v.name?'selected':''}>${esc(v.name.replace(/^(Microsoft|Google) /,''))}${Voice.isMale(v)?' · male':''}</option>`).join('')
+    : (top ? '' : '<option>Phone default voice</option>'));
 }
 if('speechSynthesis' in window) speechSynthesis.onvoiceschanged = ()=>{ Voice.pick(); fillVoices(); };
 
@@ -2237,6 +2293,7 @@ async function openStreetView(){
 // ---------------------------------------------------------------- navigation
 async function startNav(){
   const r = N.routes[N.sel]; if(!r) return;
+  Voice.unlock();
   if(!N.from.here){ openSheet('steps'); toast('Live navigation starts from your current location. Showing the directions instead.'); return; }
   carMode(); keepAwake();
   N.stage = 'nav'; N.active = true; N.follow = true; N.said = {}; N.offCount = 0; N.alerted = new Set();
@@ -2516,7 +2573,7 @@ function openSheet(kind, arg){
   s.querySelectorAll('[data-cat]').forEach(b=>b.onclick = ()=>{ openSheet('search', b.dataset.cat); searchAlong(b.dataset.cat); });
   s.querySelectorAll('[data-dua]').forEach(c=>c.onchange = ()=>{ store(c.dataset.dua, c.checked); if(c.dataset.dua==='duaAudio' && !c.checked) stopDuaAudio(); });
   s.querySelectorAll('[data-snd]').forEach(b=>b.onclick = ()=>{ N.sound = b.dataset.snd; store('sound', N.sound); setSoundIcon(); s.querySelectorAll('[data-snd]').forEach(x=>x.setAttribute('aria-pressed', x===b)); });
-  if(kind==='settings'){ fillVoices(); $('#navVoice').onchange = e=>{ Voice.set(e.target.value); Voice.say(L.voiceHello); }; $('#navTest').onclick = ()=>Voice.say(L.voiceHello); }
+  if(kind==='settings'){ fillVoices(); $('#navVoice').onchange = e=>{ Voice.unlock(); Voice.set(e.target.value); Voice.say(L.voiceHello); }; $('#navTest').onclick = ()=>{ Voice.unlock(); Voice.say(L.voiceHello); }; }
 }
 function closeSheet(){ $('#gModal').hidden = true; $('#gMSheet').innerHTML = ''; }
 async function searchAlong(type){
