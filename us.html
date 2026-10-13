@@ -422,11 +422,14 @@ body.nav-open{overflow:hidden}
 
 /* driving view: map tilted and turned under a fixed car */
 .nav.nav-drive{background:linear-gradient(#0A1424 0%,#13233A 30%,#0E1626 60%)}
-.nav.nav-drive .g-map,.nav.nav-drive .g-demo{inset:auto;transform-origin:50% 50%;will-change:transform}
-.g-sky{position:absolute;left:0;right:0;top:0;height:34%;z-index:2;pointer-events:none;background:linear-gradient(#0A1424 0%,rgba(10,20,36,.85) 35%,rgba(10,20,36,0) 100%)}
-.g-carfix{position:absolute;left:50%;top:var(--cary,72%);z-index:3;width:64px;transform:translate(-50%,-50%);pointer-events:none}
+.nav.nav-drive .g-map,.nav.nav-drive .g-demo{inset:auto;transform-origin:50% 50%;will-change:transform;backface-visibility:hidden}
+/* Frame around the whole GPS: dark green outside, thin white line inside */
+.nav{border:8px solid #01411C}
+.nav::after{content:"";position:absolute;inset:0;border:3px solid #fff;border-radius:18px;box-shadow:0 0 0 14px #01411C;pointer-events:none;z-index:60}
+.g-sky{position:absolute;left:0;right:0;top:0;height:var(--sky,34%);z-index:2;pointer-events:none;background:linear-gradient(#0A1424 0,#13233A var(--skysolid,0px),rgba(19,35,58,0) 100%)}
+.g-carfix{position:absolute;left:50%;top:var(--cary,72%);z-index:3;width:64px;transform:translate(-50%,-50%) translateZ(0);pointer-events:none}
 .g-carfix img{width:100%;display:block;filter:drop-shadow(0 10px 8px rgba(0,0,0,.55))}
-.g-logobadge{position:absolute;z-index:7;top:calc(env(safe-area-inset-top,0px) + 8px);right:12px;width:36px;height:36px;border-radius:10px;object-fit:cover;box-shadow:0 3px 12px rgba(0,0,0,.5);pointer-events:none}
+.g-logobadge{position:absolute;z-index:7;top:calc(env(safe-area-inset-top,0px) + 10px);right:12px;width:36px;height:36px;border-radius:10px;object-fit:cover;box-shadow:0 3px 12px rgba(0,0,0,.5);pointer-events:none}
 .g-banner{right:56px}
 .g-viewbtn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px}
 .g-viewbtn svg{width:22px;height:22px}
@@ -1877,7 +1880,7 @@ async function ensureMap(){
   if(N.map) return N.map;
   const { Map } = await google.maps.importLibrary('maps');
   const opts = { center:N.pos || S.here || { lat:S.from.lat, lng:S.from.lng }, zoom:14, disableDefaultUI:true, clickableIcons:false,
-    gestureHandling:'greedy', mapTypeId:N.layer, keyboardShortcuts:false };
+    gestureHandling:'greedy', mapTypeId:N.layer, keyboardShortcuts:false, backgroundColor: N.layer==='roadmap' ? '#E9EEF0' : '#22362B' };
   if(MAP_ID){ opts.mapId = MAP_ID; opts.renderingType = 'VECTOR'; }
   N.map = new Map($('#gMap'), opts);
   N.layers = { traffic:new google.maps.TrafficLayer(), transit:new google.maps.TransitLayer(), bike:new google.maps.BicyclingLayer() };
@@ -2362,6 +2365,13 @@ function navFrameRender(){
   setCompass(A.head);
 }
 const driving = ()=>N.stage==='nav' && N.view!=='north';
+// where a screen point (relative to the car) lands on the tilted, turned map plane: distance from the car in map pixels
+function groundDist(sx, sy, th){
+  const P = 1000, c = Math.cos(th), sn = Math.sin(th), den = P*c + sy*sn;
+  if(den <= 1) return Infinity;                       // above the horizon
+  const d = -sy*P/den, gx = sx*(P + d*sn)/P;
+  return Math.hypot(gx, d);
+}
 function driveLayout(){
   const nav = $('#nav'), m = G ? $('#gMap') : $('#gDemo'), on = driving();
   nav.classList.toggle('nav-drive', on);
@@ -2371,8 +2381,18 @@ function driveLayout(){
   if(N.ov.car) N.ov.car.e.style.visibility = on ? 'hidden' : '';
   if(N.map) N.map.setOptions({ gestureHandling: on ? 'none' : 'greedy' });
   if(!on) return;
-  const W = innerWidth, H = innerHeight, cy = H * (N.view==='3d' ? 0.74 : 0.64), S = Math.ceil(Math.max(W, H) * 2.4);
+  const W = nav.clientWidth || innerWidth, H = nav.clientHeight || innerHeight, cy = H * (N.view==='3d' ? 0.74 : 0.64);
+  const th = N.view==='3d' ? 46*Math.PI/180 : 0;
+  // The map is a square turned around the car, so it covers the screen in every direction only out to half its side.
+  // Size it to reach every visible corner; when the far distance in 3D is too big, cap it and let the sky fade cover the rest.
+  const need = y => Math.max(groundDist(-W/2, y-cy, th), groundDist(W/2, y-cy, th)) * 1.06 + 40;
+  const CAP = 1500;
+  let R = Math.max(need(0), need(H)), sky = 0;
+  if(R > CAP){ R = CAP; let y = 0; while(y < cy && need(y) > CAP) y += 4; sky = y; }
+  const S = Math.ceil(R*2);
   nav.style.setProperty('--cary', (cy/H*100) + '%');
+  nav.style.setProperty('--sky', (sky + 70) + 'px');
+  nav.style.setProperty('--skysolid', sky + 'px');
   Object.assign(m.style, { width:S+'px', height:S+'px', left:(W/2 - S/2)+'px', top:(cy - S/2)+'px' });
   driveTransform(A.head || N.heading || 0);
 }
@@ -2382,6 +2402,15 @@ function driveTransform(head){
   m.style.transform = `perspective(1000px) rotateX(${N.view==='3d' ? 46 : 0}deg) rotateZ(${-head}deg)`;
 }
 function distToPath(p, path){ let best = Infinity; for(let i=0;i<path.length;i++){ const d = haversine(p, path[i])*1000; if(d < best) best = d; } return best; }
+// change the zoom only when the new speed band has held for a while; every zoom change reloads all map tiles
+function driveZoom(ms){
+  if(!N.map || !N.follow) return;
+  const cur = N.map.getZoom(), now = Date.now();
+  let want = !Number.isFinite(ms) || ms===null ? cur : ms > 27 ? 16 : ms > 15 ? 17 : ms < 11 ? 18 : cur;   // gaps between bands stop flip-flopping
+  if(want === cur){ A.zWant = null; return; }
+  if(A.zWant !== want){ A.zWant = want; A.zSince = now; return; }
+  if(now - A.zSince > 6000 && now - (A.zLast||0) > 20000){ N.map.setZoom(want); A.zLast = now; A.zWant = null; }
+}
 function onNavPos(p){
   if(!N.active) return;
   const pos = { lat:p.coords.latitude, lng:p.coords.longitude };
@@ -2394,8 +2423,7 @@ function onNavPos(p){
   // keep the car on the road and glide smoothly to the new position
   const sn = snapToRoute(pos);
   const showPos = sn ? sn.pos : pos, showHead = sn && (!Number.isFinite(ms) || ms === null || ms < 12) ? sn.bearing : N.heading;
-  const zoom = !Number.isFinite(ms) || ms===null ? 18 : ms > 25 ? 16 : ms > 14 ? 17 : 18;
-  if(N.map && N.map.getZoom() !== zoom && N.follow) N.map.setZoom(zoom);
+  driveZoom(ms);
   navTarget(showPos, showHead);
   progress(pos);
 }
@@ -2748,10 +2776,10 @@ function demoDraw(){
   const ground = sat ? '#22362B' : N.layer==='terrain' ? '#D6E2C8' : '#16202f', road = sat ? '#55606A' : N.layer==='terrain' ? '#FFFFFF' : '#2a3850', block = sat ? '#2D4636' : N.layer==='terrain' ? '#C5D6B3' : '#1B2638';
   const baseKey = N.layer + N.traffic;
   if(!$('#gBase') || N.demoBaseKey !== baseKey){
-    let base = `<rect x="-800" y="-800" width="2000" height="2400" fill="${ground}"/>`;
-    for(let x=-800;x<=1200;x+=60) base += `<line x1="${x}" y1="-800" x2="${x}" y2="1600" stroke="${road}" stroke-width="7"/>`;
-    for(let y=-800;y<=1600;y+=55) base += `<line x1="-800" y1="${y}" x2="1200" y2="${y}" stroke="${road}" stroke-width="7"/>`;
-    for(let x=-800;x<1200;x+=60) for(let y=-800;y<1600;y+=55) if(((x*7+y*3)/5|0)%9>1) base += `<rect x="${x+7}" y="${y+7}" width="46" height="41" rx="4" fill="${block}"/>`;
+    let base = `<rect x="-1400" y="-1400" width="3200" height="3600" fill="${ground}"/>`;
+    for(let x=-1400;x<=1800;x+=60) base += `<line x1="${x}" y1="-1400" x2="${x}" y2="2200" stroke="${road}" stroke-width="7"/>`;
+    for(let y=-1400;y<=2200;y+=55) base += `<line x1="-1400" y1="${y}" x2="1800" y2="${y}" stroke="${road}" stroke-width="7"/>`;
+    for(let x=-1400;x<1800;x+=60) for(let y=-1400;y<2200;y+=55) if(((x*7+y*3)/5|0)%9>1) base += `<rect x="${x+7}" y="${y+7}" width="46" height="41" rx="4" fill="${block}"/>`;
     base += `<path d="M-200 820 C 60 760, 160 900, 420 860 S 700 780, 900 840 L 900 1400 L -200 1400 Z" fill="${sat?'#1C3A4A':'#0F2A3A'}"/>`;
     if(N.traffic) base += `<path d="M-800 400 H 1200" stroke="#F2A33A" stroke-width="4" opacity=".7"/><path d="M200 -800 V 1600" stroke="#36B37E" stroke-width="4" opacity=".7"/>`;
     svg.innerHTML = `<g id="gWorld"><g id="gBase">${base}</g><g id="gDyn"></g></g>`;
