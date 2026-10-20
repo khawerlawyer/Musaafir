@@ -246,7 +246,7 @@ body.nav-open{overflow:hidden}
 .nav button{font:inherit;color:inherit;cursor:pointer}
 .nav svg{display:block}
 .g-map,.g-demo{position:absolute;inset:0;width:100%;height:100%}
-.g-demo{background:#16202f}
+.g-demo{background:#16202f;touch-action:none}
 
 /* top card */
 .g-top{position:absolute;left:0;right:0;top:0;padding:calc(env(safe-area-inset-top,0px) + 8px) 12px 0;z-index:5;max-width:480px;display:flex;flex-direction:column;gap:6px}
@@ -383,6 +383,11 @@ body.nav-open{overflow:hidden}
 .g-speed{position:absolute;left:12px;bottom:calc(env(safe-area-inset-bottom,0px) + 112px);width:66px;height:66px;border-radius:50%;background:#fff;color:#111;display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(0,0,0,.45)}
 .g-speed b{font-family:var(--font-display);font-size:24px;line-height:1}
 .g-speed span{font-size:11px;font-weight:700}
+.g-zoom{position:absolute;z-index:6;right:12px;display:flex;flex-direction:column;border-radius:16px;overflow:hidden;background:#0B0F17;box-shadow:0 4px 14px rgba(0,0,0,.5)}
+.g-zoom button{width:48px;height:46px;border:0;background:none;color:#fff;display:grid;place-items:center}
+.g-zoom button + button{border-top:1px solid rgba(255,255,255,.14)}
+.g-zoom svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round}
+.g-zoom button:active{background:rgba(255,255,255,.12)}
 .g-recenter{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 112px);display:flex;align-items:center;gap:8px;border:0;border-radius:999px;background:#0B0F17;color:#8AB4FF;font-weight:800;padding:12px 18px;box-shadow:0 4px 14px rgba(0,0,0,.5)}
 .g-recenter svg{width:18px;height:18px;fill:currentColor}
 .g-navbar{position:absolute;left:0;right:0;bottom:0;background:var(--g-bg);border-radius:22px 22px 0 0;padding:6px 16px calc(env(safe-area-inset-bottom,0px) + 12px);box-shadow:0 -6px 24px rgba(0,0,0,.5)}
@@ -575,6 +580,7 @@ body.nav-open{overflow:hidden}
   <!-- Map buttons (home + overview) -->
   <button class="g-fab g-layers" id="gLayersBtn" type="button" aria-label="Map layers"><svg viewBox="0 0 24 24"><path d="M12 3 2 8.5 12 14l10-5.5L12 3Z"/><path d="M2 13.5 12 19l10-5.5"/></svg></button>
   <button class="g-fab g-locate" id="gLocateBtn" type="button" aria-label="Show my location"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" class="fill"/><circle cx="12" cy="12" r="8"/><path d="M12 1v3M12 20v3M1 12h3M20 12h3"/></svg></button>
+  <div class="g-zoom" id="gZoom"><button type="button" id="gZoomIn" aria-label="Zoom in"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button><button type="button" id="gZoomOut" aria-label="Zoom out"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button></div>
   <button class="g-sv" id="gSvThumb" type="button" hidden aria-label="Open Street View of the destination"><span class="g-sv-pano" id="gSvPano"></span><span class="g-sv-tag">Street View</span></button>
 
   <!-- Bottom sheet (home + overview) -->
@@ -1872,6 +1878,7 @@ function closeGps(){
   N.open = false; $('#nav').hidden = true; document.body.classList.remove('nav-open');
 }
 function goHome(){
+  N.demoView = null;
   N.stage = 'home'; N.routes = []; clearOverlays(); hideStreetView();
   renderTop(); renderSheet(); placeFabs();
   showMap();
@@ -1885,21 +1892,27 @@ async function ensureMap(){
   const { Map } = await google.maps.importLibrary('maps');
   const opts = { center:N.pos || S.here || { lat:S.from.lat, lng:S.from.lng }, zoom:14, disableDefaultUI:true, clickableIcons:false,
     gestureHandling:'greedy', mapTypeId:N.layer, keyboardShortcuts:false, backgroundColor: N.layer==='roadmap' ? '#E9EEF0' : '#22362B' };
-  if(MAP_ID){ opts.mapId = MAP_ID; opts.renderingType = 'VECTOR'; }
+  // Vector rendering (no map ID needed) gives smooth native tilt, turning and finger gestures, like Google Maps
+  opts.renderingType = 'VECTOR'; opts.tiltInteractionEnabled = true; opts.headingInteractionEnabled = true;
+  if(MAP_ID) opts.mapId = MAP_ID;
   N.map = new Map($('#gMap'), opts);
+  // any finger or mouse move of the map while navigating stops the camera following the car until Re-centre
+  const stopFollow = ()=>{ if(N.stage==='nav' && N.follow){ N.follow = false; $('#gRecenter').hidden = false; driveLayout(); } };
+  N.map.addListener('dragstart', stopFollow);
+  $('#gMap').addEventListener('touchstart', e=>{ if(e.touches.length > 1) stopFollow(); }, { passive:true });
+  $('#gMap').addEventListener('wheel', stopFollow, { passive:true });
   N.layers = { traffic:new google.maps.TrafficLayer(), transit:new google.maps.TransitLayer(), bike:new google.maps.BicyclingLayer() };
   applyLayers();
-  N.map.addListener('dragstart', ()=>{ if(N.stage==='nav' && N.view==='north'){ N.follow = false; $('#gRecenter').hidden = false; } });
   return N.map;
 }
 function showMap(){
   const demo = !G;
   $('#gMap').hidden = demo; $('#gDemo').toggleAttribute('hidden', !demo);
-  if(demo) demoDraw(); else ensureMap();
+  if(demo){ demoGestures(); demoDraw(); } else ensureMap();
 }
 function applyLayers(){
   if(!N.map) return;
-  N.map.setMapTypeId(N.layer);
+  N.map.setMapTypeId(N.stage==='nav' && N.view!=='north' ? 'roadmap' : N.layer);
   N.layers.traffic.setMap(N.traffic ? N.map : null);
   N.layers.transit.setMap(N.transitLayer || (N.stage!=='home' && N.mode==='transit') ? N.map : null);
   N.layers.bike.setMap(N.bikeLayer || (N.stage!=='home' && N.mode==='cycle') ? N.map : null);
@@ -2255,6 +2268,9 @@ function placeFabs(){
     const sheetTop = innerWidth >= 800 ? innerHeight - 16 : $('#gSheet').getBoundingClientRect().top;
     $('#gLocateBtn').style.top = (sheetTop - 64) + 'px';
     $('#gSvThumb').style.top = (sheetTop - 112) + 'px';
+    const z = $('#gZoom');
+    if(overview){ z.style.bottom = ''; z.style.right = '12px'; z.style.top = (top + 72) + 'px'; }
+    else { const rt = $('#gNavUI .g-rail').getBoundingClientRect().top, nh = $('#nav').getBoundingClientRect().bottom; z.style.top = ''; z.style.right = '10px'; z.style.bottom = (nh - rt + 12) + 'px'; }
     if(innerWidth >= 800){ $('#gLocateBtn').style.top = (innerHeight - 80) + 'px'; $('#gSvThumb').style.left = '472px'; $('#gSvThumb').style.top = (innerHeight - 120) + 'px'; }
   });
 }
@@ -2292,6 +2308,7 @@ async function startNav(){
   renderTop(); renderSheet(); placeFabs(); hideStreetView();
   $('#gNavUI').hidden = false; $('#gArrived').hidden = true; $('#gNavMore').hidden = true; $('#gNavHandle').setAttribute('aria-expanded','false');
   $('#gModePill').innerHTML = modeIcon(N.mode, 26);
+  placeFabs();
   setSoundIcon(); setCompass();
   addRecent(N.to);
   const how = isRoad(N.mode) && N.routes.length>1 ? (r.tags.includes('fast') ? ', on the fastest route' : r.tags.includes('safe') ? ', on the Musaafir safest route' : r.tags.includes('eco') ? ', on the fuel-efficient route' : '') : (isRoad(N.mode) ? '' : ` by ${MODES[N.mode].label.toLowerCase()}`);
@@ -2300,50 +2317,66 @@ async function startNav(){
   if(!G){ driveLayout(); demoNav(); return; }
   clearOverlays();
   drawNavRoute();
-  N.map.setZoom(18);
+  A.zoom = 18; A.zOff = 0; A.cam = null; A.pos = null; A.snapIdx = 0; A.toldSat = false;
   N.ov.car = overlay(N.pos || r.path[0], el('g-car', carHtml()), 40);
-  A.pos = null; A.snapIdx = 0; driveLayout();
+  driveLayout();
   onNavPos({ coords:{ latitude:(N.pos||r.path[0]).lat, longitude:(N.pos||r.path[0]).lng, heading:null, speed:null } });
   N.watch = navigator.geolocation.watchPosition(onNavPos, err=>{ if(err.code===1) showBanner('Location is off','Allow location for this site to keep navigating.','STRAIGHT'); }, { enableHighAccuracy:true, maximumAge:1000, timeout:20000 });
   clearInterval(N.reportTimer); N.reportTimer = setInterval(()=>loadReports().then(()=>drawReports()), 120000);
 }
 function useRoute(r){
   N.steps = r.steps.map(s=>({ ...s })); N.idx = 0; N.path = r.path;
+  // distance along the route of every path point and of every turn, so progress follows the road and never repeats
+  const P = N.path || []; N.cum = [0];
+  for(let i=1;i<P.length;i++) N.cum[i] = N.cum[i-1] + haversine(P[i-1], P[i])*1000;
+  let from = 0;
+  N.steps.forEach(st=>{ const i = st.end ? nearestIdx(st.end, from) : from; st.endIdx = i; st.endAlong = N.cum[i] ?? 0; from = i; });
+  A.snapIdx = 0; A.trimIdx = 0; A.along = 0;
   N.totalM = r.km*1000; N.totalMin = r.min; N.eta = Date.now() + r.min*60000;
 }
 function drawNavRoute(){
   N.ov.lines.forEach(l=>l.setMap(null)); N.ov.lines = []; N.ov.marks.forEach(o=>o.setMap(null)); N.ov.marks = [];
   const r = N.routes[N.sel], dotted = !isRoad(N.mode) && N.mode!=='transit';
-  if(dotted) N.ov.lines.push(new google.maps.Polyline({ map:N.map, path:N.path, strokeOpacity:0, zIndex:20, icons:[{ icon:{ path:google.maps.SymbolPath.CIRCLE, scale:4.5, fillColor:'#3B6CFF', fillOpacity:1, strokeWeight:0 }, offset:'0', repeat:'15px' }] }));
+  A.trimIdx = 0; A.line = new google.maps.MVCArray(N.path.map(p=>new google.maps.LatLng(p.lat, p.lng)));
+  if(dotted) N.ov.lines.push(new google.maps.Polyline({ map:N.map, path:A.line, strokeOpacity:0, zIndex:20, icons:[{ icon:{ path:google.maps.SymbolPath.CIRCLE, scale:4.5, fillColor:'#3B6CFF', fillOpacity:1, strokeWeight:0 }, offset:'0', repeat:'15px' }] }));
   else {
-    N.ov.lines.push(new google.maps.Polyline({ map:N.map, path:N.path, strokeColor:'#1B2BB0', strokeWeight:14, zIndex:20 }));
-    N.ov.lines.push(new google.maps.Polyline({ map:N.map, path:N.path, strokeColor:'#3B3BFF', strokeWeight:9, zIndex:21 }));
-    (r?.speedPaths||[]).forEach(sp=>{ if(sp.speed==='SLOW' || sp.speed==='TRAFFIC_JAM') N.ov.lines.push(new google.maps.Polyline({ map:N.map, path:sp.path, strokeColor:sp.speed==='SLOW'?'#F2A33A':'#E5484D', strokeWeight:9, zIndex:22 })); });
+    N.ov.lines.push(new google.maps.Polyline({ map:N.map, path:A.line, strokeColor:'#1B2BB0', strokeWeight:14, zIndex:20 }));
+    N.ov.lines.push(new google.maps.Polyline({ map:N.map, path:A.line, strokeColor:'#3B3BFF', strokeWeight:9, zIndex:21 }));
+    A.slow = [];
+    (r?.speedPaths||[]).forEach(sp=>{ if((sp.speed==='SLOW' || sp.speed==='TRAFFIC_JAM') && sp.path.length){ const l = new google.maps.Polyline({ map:N.map, path:sp.path, strokeColor:sp.speed==='SLOW'?'#F2A33A':'#E5484D', strokeWeight:9, zIndex:22 }); N.ov.lines.push(l); A.slow.push({ l, endIdx:nearestIdx(sp.path[sp.path.length-1], 0) }); } });
   }
   N.stops.forEach((s,i)=>N.ov.marks.push(overlay(s, el('g-snum', String(i+1)), 26)));
   N.ov.marks.push(overlay({ lat:N.to.lat, lng:N.to.lng }, el('g-pin', PIN_SVG), 27));
   drawReports();
 }
 // ---- smooth driving view ----
-const A = { pos:null, head:0, from:null, to:null, h0:0, h1:0, t0:0, dur:1000, last:0, raf:0, snapIdx:0 };
+const A = { pos:null, head:0, from:null, to:null, h0:0, h1:0, t0:0, dur:1000, last:0, raf:0, snapIdx:0, trimIdx:0, along:0, cam:null, zoom:18, ease:0 };
 const lerp = (a,b,k)=>a+(b-a)*k;
 const angLerp = (a,b,k)=>{ const d = ((b - a + 540) % 360) - 180; return (a + d*k + 360) % 360; };
+// local flat metres around a point (fine for the short distances used here)
+const kxy = lat => [111320*Math.cos(lat*Math.PI/180), 110540];
+function segDist(p, a, b){
+  const [kx, ky] = kxy(p.lat);
+  const ax = (a.lng-p.lng)*kx, ay = (a.lat-p.lat)*ky, bx = (b.lng-p.lng)*kx, by = (b.lat-p.lat)*ky;
+  const dx = bx-ax, dy = by-ay, L2 = dx*dx+dy*dy || 1;
+  const t = Math.max(0, Math.min(1, -(ax*dx+ay*dy)/L2));
+  return { d:Math.hypot(ax+dx*t, ay+dy*t), t };
+}
+function nearestIdx(p, from){
+  const P = N.path || []; let best = from, bd = Infinity;
+  for(let i=from; i<P.length; i++){ const d = haversine(p, P[i]); if(d < bd){ bd = d; best = i; } }
+  return best;
+}
 function snapToRoute(p){
   const path = N.path; if(!path || path.length < 2) return null;
-  const lo = Math.max(0, A.snapIdx - 5), hi = Math.min(path.length-1, A.snapIdx + 80);
-  const kx = 111320*Math.cos(p.lat*Math.PI/180), ky = 110540;
+  const lo = Math.max(0, A.snapIdx - 5), hi = Math.min(path.length-1, A.snapIdx + 120);
   let best = null;
-  for(let i=lo; i<hi; i++){
-    const a = path[i], b = path[i+1];
-    const ax = (a.lng-p.lng)*kx, ay = (a.lat-p.lat)*ky, bx = (b.lng-p.lng)*kx, by = (b.lat-p.lat)*ky;
-    const dx = bx-ax, dy = by-ay, L2 = dx*dx+dy*dy || 1;
-    const t = Math.max(0, Math.min(1, -(ax*dx+ay*dy)/L2));
-    const px = ax+dx*t, py = ay+dy*t, d = Math.hypot(px, py);
-    if(!best || d < best.d) best = { d, i, t, a, b };
-  }
+  for(let i=lo; i<hi; i++){ const r = segDist(p, path[i], path[i+1]); if(!best || r.d < best.d) best = { ...r, i }; }
   if(!best || best.d > 35) return null;
   A.snapIdx = best.i;
-  return { pos:{ lat:lerp(best.a.lat, best.b.lat, best.t), lng:lerp(best.a.lng, best.b.lng, best.t) }, bearing:bearing(best.a, best.b) };
+  const a = path[best.i], b = path[best.i+1];
+  A.along = (N.cum?.[best.i] || 0) + ((N.cum?.[best.i+1] || 0) - (N.cum?.[best.i] || 0)) * best.t;
+  return { pos:{ lat:lerp(a.lat, b.lat, best.t), lng:lerp(a.lng, b.lng, best.t) }, bearing:bearing(a, b) };
 }
 function navTarget(pos, head){
   const now = performance.now();
@@ -2358,62 +2391,98 @@ function navFrame(now){
   const k = Math.min(1, (now - A.t0) / A.dur);
   A.pos = { lat:lerp(A.from.lat, A.to.lat, k), lng:lerp(A.from.lng, A.to.lng, k) };
   A.head = angLerp(A.h0, A.h1, k);
+  A.dt = A.prevNow ? Math.min(100, now - A.prevNow) : 16; A.prevNow = now;
   navFrameRender();
   A.raf = requestAnimationFrame(navFrame);
 }
+// the camera the map should have right now (Google mode)
+function camTarget(){
+  const v = N.view, tilt = v==='3d' ? 60 : 0, heading = v==='north' ? 0 : A.head;
+  // in the driving views put the car low on the screen by looking at a point ahead of it
+  let center = A.pos;
+  if(v !== 'north'){
+    const H = $('#nav').clientHeight || innerHeight, mpp = 156543.03*Math.cos(A.pos.lat*Math.PI/180)/Math.pow(2, A.zoom);
+    const ahead = H * (v==='3d' ? 0.22 : 0.14) * 156543.03*Math.cos(A.pos.lat*Math.PI/180)/Math.pow(2, A.zoom + (A.zOff||0)) * (v==='3d' ? 1.9 : 1), [kx, ky] = kxy(A.pos.lat), r = heading*Math.PI/180;
+    center = { lat:A.pos.lat + Math.cos(r)*ahead/ky, lng:A.pos.lng + Math.sin(r)*ahead/kx };
+  }
+  return { center, heading, tilt, zoom:Math.max(3, Math.min(21, A.zoom + (A.zOff||0))) };
+}
 function navFrameRender(){
   if(!A.pos) return;
-  if(N.ov.car){ N.ov.car.move(A.pos); const ci = N.ov.car.e.querySelector('img'); if(ci) ci.style.transform = `rotate(${A.head}deg)`; }
-  if(N.follow && N.map){ try{ N.map.moveCamera({ center:A.pos }); }catch(e){ N.map.setCenter(A.pos); } }
-  driveTransform(A.head);
-  setCompass(A.head);
+  if(!G){ return; }
+  if(N.map && N.follow){
+    const t = camTarget();
+    if(!A.cam){ A.cam = t; }
+    else {
+      const e = Math.min(1, (A.dt||16) / (A.ease > performance.now() ? 260 : 140));   // gentle easing; slower right after Re-centre
+      A.cam = { center:A.ease > performance.now() ? { lat:lerp(A.cam.center.lat, t.center.lat, e), lng:lerp(A.cam.center.lng, t.center.lng, e) } : t.center,
+        heading:angLerp(A.cam.heading, t.heading, e), tilt:lerp(A.cam.tilt, t.tilt, e), zoom:lerp(A.cam.zoom, t.zoom, e) };
+    }
+    try{ N.map.moveCamera(A.cam); }catch(e){ N.map.setCenter(A.cam.center); }
+  }
+  const mapHead = (N.map && N.map.getHeading && N.map.getHeading()) || 0;
+  if(N.ov.car){ N.ov.car.move(A.pos); const ci = N.ov.car.e.querySelector('img'); if(ci) ci.style.transform = `rotate(${A.head - mapHead}deg)`; }
+  trimLine();
+  setCompass(mapHead);
 }
-const driving = ()=>N.stage==='nav' && N.view!=='north';
-// where a screen point (relative to the car) lands on the tilted, turned map plane: distance from the car in map pixels
+// remove the part of the blue line the car has already driven
+function trimLine(){
+  if(!A.line || !N.path || N.path.length < 2) return;
+  const P = N.path;
+  let best = A.trimIdx, bd = Infinity;
+  for(let i=A.trimIdx; i<Math.min(P.length-1, A.trimIdx+8); i++){ const d = segDist(A.pos, P[i], P[i+1]).d; if(d < bd){ bd = d; best = i; } }
+  if(bd > 40) return;                                   // off the line: leave it as it is
+  while(A.trimIdx < best){ if(A.line.getLength() > 2) A.line.removeAt(0); A.trimIdx++; }
+  A.line.setAt(0, new google.maps.LatLng(A.pos.lat, A.pos.lng));
+  (A.slow||[]).forEach(s=>{ if(s.l.getMap() && A.trimIdx > s.endIdx) s.l.setMap(null); });
+}
+// demo only: the CSS-tilted practice map (the real map tilts natively)
+const driving = ()=>!G && N.stage==='nav' && N.view!=='north' && N.follow;
 function groundDist(sx, sy, th){
   const P = 1000, c = Math.cos(th), sn = Math.sin(th), den = P*c + sy*sn;
-  if(den <= 1) return Infinity;                       // above the horizon
+  if(den <= 1) return Infinity;
   const d = -sy*P/den, gx = sx*(P + d*sn)/P;
   return Math.hypot(gx, d);
 }
 function driveLayout(){
-  const nav = $('#nav'), m = G ? $('#gMap') : $('#gDemo'), on = driving();
+  const nav = $('#nav'), on = driving();
   nav.classList.toggle('nav-drive', on);
   $('#gSky').hidden = !(on && N.view==='3d');
   $('#gCarFix').hidden = !on;
   ['#gMap','#gDemo'].forEach(s=>{ const e = $(s); e.style.width = e.style.height = e.style.left = e.style.top = e.style.transform = ''; });
-  if(N.ov.car) N.ov.car.e.style.visibility = on ? 'hidden' : '';
-  if(N.map) N.map.setOptions({ gestureHandling: on ? 'none' : 'greedy' });
+  if(G){
+    if(!N.map) return;
+    const nav2 = N.stage==='nav';
+    // the road map turns and tilts natively; satellite can't, so the driving views use the road map
+    const wantType = nav2 && N.view!=='north' ? 'roadmap' : N.layer;
+    if(N.map.getMapTypeId() !== wantType){ N.map.setMapTypeId(wantType); if(wantType!==N.layer && !A.toldSat){ A.toldSat = true; toast('3D and 2D driving use the road map so it can tilt and turn. Choose N for satellite.'); } }
+    if(!nav2){ N.map.moveCamera({ heading:0, tilt:0 }); A.cam = null; return; }
+    if(N.follow){ A.ease = performance.now() + 900; if(A.cam) A.cam = { center:ll(N.map.getCenter()), heading:N.map.getHeading?.()||0, tilt:N.map.getTilt?.()||0, zoom:N.map.getZoom()||A.zoom }; }
+    return;
+  }
   if(!on) return;
   const W = nav.clientWidth || innerWidth, H = nav.clientHeight || innerHeight, cy = H * (N.view==='3d' ? 0.74 : 0.64);
   const th = N.view==='3d' ? 46*Math.PI/180 : 0;
-  // The map is a square turned around the car, so it covers the screen in every direction only out to half its side.
-  // Size it to reach every visible corner; when the far distance in 3D is too big, cap it and let the sky fade cover the rest.
   const need = y => Math.max(groundDist(-W/2, y-cy, th), groundDist(W/2, y-cy, th)) * 1.06 + 40;
   const CAP = 1500;
   let R = Math.max(need(0), need(H)), sky = 0;
   if(R > CAP){ R = CAP; let y = 0; while(y < cy && need(y) > CAP) y += 4; sky = y; }
-  const S = Math.ceil(R*2);
+  const S = Math.ceil(R*2), m = $('#gDemo');
   nav.style.setProperty('--cary', (cy/H*100) + '%');
   nav.style.setProperty('--sky', (sky + 70) + 'px');
   nav.style.setProperty('--skysolid', sky + 'px');
   Object.assign(m.style, { width:S+'px', height:S+'px', left:(W/2 - S/2)+'px', top:(cy - S/2)+'px' });
-  driveTransform(A.head || N.heading || 0);
+  driveTransform(N.demoCar?.a || 0);
 }
 function driveTransform(head){
   if(!driving()) return;
-  const m = G ? $('#gMap') : $('#gDemo');
-  m.style.transform = `perspective(1000px) rotateX(${N.view==='3d' ? 46 : 0}deg) rotateZ(${-head}deg)`;
+  $('#gDemo').style.transform = `perspective(1000px) rotateX(${N.view==='3d' ? 46 : 0}deg) rotateZ(${-head}deg)`;
 }
-function distToPath(p, path){ let best = Infinity; for(let i=0;i<path.length;i++){ const d = haversine(p, path[i])*1000; if(d < best) best = d; } return best; }
-// change the zoom only when the new speed band has held for a while; every zoom change reloads all map tiles
+function distToPath(p, path){ if(!path.length) return Infinity; if(path.length===1) return haversine(p, path[0])*1000; let best = Infinity; for(let i=0;i<path.length-1;i++){ const d = segDist(p, path[i], path[i+1]).d; if(d < best) best = d; } return best; }
 function driveZoom(ms){
-  if(!N.map || !N.follow) return;
-  const cur = N.map.getZoom(), now = Date.now();
-  let want = !Number.isFinite(ms) || ms===null ? cur : ms > 27 ? 16 : ms > 15 ? 17 : ms < 11 ? 18 : cur;   // gaps between bands stop flip-flopping
-  if(want === cur){ A.zWant = null; return; }
-  if(A.zWant !== want){ A.zWant = want; A.zSince = now; return; }
-  if(now - A.zSince > 6000 && now - (A.zLast||0) > 20000){ N.map.setZoom(want); A.zLast = now; A.zWant = null; }
+  if(!Number.isFinite(ms) || ms===null) return;
+  const want = ms > 27 ? 16 : ms > 15 ? 17 : ms < 11 ? 18 : A.zoom;   // gaps between bands stop flip-flopping
+  A.zoom = want;
 }
 function onNavPos(p){
   if(!N.active) return;
@@ -2429,19 +2498,20 @@ function onNavPos(p){
   const showPos = sn ? sn.pos : pos, showHead = sn && (!Number.isFinite(ms) || ms === null || ms < 12) ? sn.bearing : N.heading;
   driveZoom(ms);
   navTarget(showPos, showHead);
-  progress(pos);
+  progress(pos, !!sn);
 }
-function progress(pos){
+function progress(pos, onRoute){
   const reach = N.mode==='walk' ? 15 : N.mode==='transit' ? 40 : 25;
-  while(N.idx < N.steps.length-1 && haversine(pos, N.steps[N.idx].end)*1000 < reach) N.idx++;
+  if(onRoute && N.cum){ while(N.idx < N.steps.length-1 && N.steps[N.idx].endAlong <= A.along + 8) N.idx++; }
+  else while(N.idx < N.steps.length-1 && haversine(pos, N.steps[N.idx].end)*1000 < reach) N.idx++;
   const step = N.steps[N.idx]; if(!step) return;
-  const toEnd = haversine(pos, step.end)*1000;
+  const toEnd = onRoute && N.cum ? Math.max(0, step.endAlong - A.along) : haversine(pos, step.end)*1000;
   const next = N.steps[N.idx+1];
   // off route?
   const offLimit = N.mode==='walk' ? 45 : N.mode==='transit' ? 150 : 60;
   const off = distToPath(pos, N.steps.slice(N.idx, N.idx+3).flatMap(s=>s.path));
   N.offCount = off > offLimit ? N.offCount+1 : 0;
-  if(N.offCount >= 3 && !N.rerouting && G){ N.offCount = 0; showBanner('Rerouting…','','STRAIGHT'); speak('Rerouting.'); reroute(pos); return; }
+  if(N.offCount >= 3 && !N.rerouting && G && Date.now() - (N.lastReroute||0) > 20000){ N.offCount = 0; N.lastReroute = Date.now(); showBanner('Rerouting…','','STRAIGHT'); speak('Rerouting.'); reroute(pos); return; }
   // arrived?
   if((step.man==='ARRIVE' || !next) && haversine(pos, { lat:N.to.lat, lng:N.to.lng })*1000 < 40){ arrived(); return; }
   const up = next || step;
@@ -2449,7 +2519,7 @@ function progress(pos){
   const after = N.steps[N.idx+2];
   $('#gThen').hidden = !(after && after.man!=='ARRIVE' && (next?.dist||0) < 400);
   if(after) $('#gThenIcon').innerHTML = maneuverSvg(after.man);
-  drawCallout(up);
+  drawCallout(up, toEnd);
   // voice prompts
   const k = N.idx;
   if(step.transit){ if(toEnd <= 700 && !N.said[k+'t']){ N.said[k+'t'] = 1; speak('Get ready. Your stop is coming up.'); } }
@@ -2461,6 +2531,7 @@ function progress(pos){
   }
   // remaining
   let remM = toEnd; for(let i=N.idx+1;i<N.steps.length;i++) remM += N.steps[i].dist;
+  if(onRoute && N.cum) remM = Math.max(0, N.cum[N.cum.length-1] - A.along);
   const remMin = Math.max(1, Math.round(N.totalMin * (N.totalM ? remM/N.totalM : 0)));
   updateNavBar(remM, remMin);
   hazardAhead(pos);
@@ -2468,6 +2539,7 @@ function progress(pos){
   if(G && isRoad(N.mode) && Date.now() - N.lastAltCheck > 180000){ N.lastAltCheck = Date.now(); checkAlternatives(pos, remMin); }
 }
 function showBanner(dist, street, man, sub){
+  if(sub && street && sub.toLowerCase().includes(String(street).toLowerCase())) sub = '';
   $('#gMan').innerHTML = maneuverSvg(man);
   $('#gBDist').textContent = dist; $('#gBStreet').textContent = street || ''; $('#gBSub').textContent = sub || ''; $('#gBSub').hidden = !sub;
   const h = $('#gBanner').getBoundingClientRect().height; $('#gNavUI').style.setProperty('--bh', (h - 8) + 'px');
@@ -2478,9 +2550,9 @@ function updateNavBar(remM, remMin){
   $('#gEtaSub').textContent = `${fmtDist(remM)} • ${clock(remMin)}`;
   N.remM = remM; N.remMin = remMin;
 }
-function drawCallout(step){
+function drawCallout(step, toEnd){
   if(!G || !N.map) return;
-  const txt = step.street && step.man!=='ARRIVE' ? step.street : '';
+  const txt = step && step.street && step.man!=='ARRIVE' && !(toEnd < 70) ? step.street : '';
   if(!txt){ if(N.ov.callout){ N.ov.callout.setMap(null); N.ov.callout = null; } return; }
   if(N.ov.callout && N.ov.callout.e.textContent===txt) return;
   if(N.ov.callout) N.ov.callout.setMap(null);
@@ -2491,7 +2563,7 @@ async function reroute(pos){
   try{
     const rs = await computeWithFallback(routeRequest(pos, N.mode, { alts:false }));
     N.routes = rs.map(wrapRoute); N.sel = 0; tagRoutes(); useRoute(N.routes[0]); N.said = {};
-    drawNavRoute(); speak('Route updated.');
+    drawNavRoute(); drawCallout(null); speak('Route updated.');
   }catch(e){ console.error(e); showBanner('Couldn\'t reroute', 'Keep going and we\'ll try again.', 'STRAIGHT'); }
   N.rerouting = false;
 }
@@ -2507,7 +2579,8 @@ async function checkAlternatives(pos, remMin){
       const b = el('g-bubble alt'+(better?' better':''), `<b>${esc(r.desc||'Other route')}</b><small>${better ? `${-diff} min faster` : diff>=1 ? `${diff} min slower` : 'Similar time'}${r.hazards===0 && N.reports.length ? ' · no reports' : ''}</small>`);
       b.onclick = ()=>{ N.routes = [r]; N.sel = 0; tagRoutes(); useRoute(r); N.said = {}; N.ov.alt.forEach(o=>o.setMap(null)); N.ov.alt = []; drawNavRoute(); speak('Switched to the new route.'); };
       N.ov.alt.push(overlay(bubblePoint(r, [{ path:cur }]), b, 32));
-      if(better) speak(`A faster route is available. It saves ${-diff} minute${diff===-1?'':'s'}. Tap it to switch.`, 'alert');
+      const altKey = 'alt:'+(r.desc||r.min), fresh = better && !N.alerted.has(altKey); if(fresh) N.alerted.add(altKey);
+      if(fresh) speak(`A faster route is available. It saves ${-diff} minute${diff===-1?'':'s'}. Tap it to switch.`, 'alert');
     });
     setTimeout(()=>{ N.ov.alt.forEach(o=>o.setMap(null)); N.ov.alt = []; }, 30000);
   }catch(e){}
@@ -2537,7 +2610,7 @@ function endNav(silent){
   if('speechSynthesis' in window) speechSynthesis.cancel();
   $('#gNavUI').hidden = true; $('#gArrived').hidden = true; $('#gSpeed').hidden = true; $('#gRecenter').hidden = true; $('#gAlert').hidden = true;
   if(N.ov.car){ N.ov.car.setMap(null); N.ov.car = null; }
-  N.stage = 'overview'; cancelAnimationFrame(A.raf); A.raf = 0; A.pos = null; driveLayout();
+  N.stage = 'overview'; cancelAnimationFrame(A.raf); A.raf = 0; A.pos = null; A.line = null; N.demoFree = null; driveLayout();
   if(!silent){ toast('Navigation ended'); renderTop(); planRoutes(); }
 }
 let wakeLock = null;
@@ -2697,9 +2770,25 @@ function shareTrip(){ if(N.to) shareText(`${L.brand} trip`, `I'm on my way to ${
 // ---------------------------------------------------------------- buttons
 function setSoundIcon(){ $('#gSoundIcon').innerHTML = SOUND_ICON[N.sound]; $('#gSound').setAttribute('aria-label', `Sound: ${{on:'unmuted',alerts:'alerts only',off:'muted'}[N.sound]}`); }
 const VIEW_NAMES = { '3d':'3D view, map turns with you', up:'2D, map turns with you', north:'North up' };
+// + / - buttons: while following the car they change how close the camera is; otherwise they zoom the map
+function zoomBy(dz){
+  if(G && N.map){
+    if(N.stage==='nav' && N.follow){ A.zOff = Math.max(-8, Math.min(3, (A.zOff||0) + dz)); return; }
+    N.map.setZoom(Math.max(3, Math.min(21, Math.round(N.map.getZoom() + dz))));
+    return;
+  }
+  // practice map
+  if(N.stage==='nav' && N.follow){ A.zOff = Math.max(-3, Math.min(2, (A.zOff||0) + dz)); demoCamera(); demoDraw(); return; }
+  const v = demoFreeView(); v.s = Math.max(.25, Math.min(10, v.s * Math.pow(2, dz))); demoCamera(); demoDraw();
+}
+function recenter(){
+  N.follow = true; N.demoFree = null; $('#gRecenter').hidden = true; setCompass();
+  driveLayout();
+  if(!G){ demoDraw(); } else navFrameRender();
+}
 function setCompass(head){
-  const h = head ?? N.heading;
-  $('#gNeedle').style.transform = N.view==='north' ? 'none' : `rotate(${-h}deg)`;
+  const h = head ?? (G ? (N.map?.getHeading?.() || 0) : N.view==='north' ? 0 : N.heading);
+  $('#gNeedle').style.transform = `rotate(${-h}deg)`;
   $('#gViewLbl').textContent = { '3d':'3D', up:'2D', north:'N' }[N.view];
   $('#gCompass').setAttribute('aria-label', `Map direction: ${VIEW_NAMES[N.view]}. Tap to change.`);
 }
@@ -2742,13 +2831,14 @@ function bindGps(){
   $('#gRouteOpts').onclick = ()=>{ openSheet('options'); if(G && N.pos){ N.lastAltCheck = Date.now(); checkAlternatives(N.pos, N.remMin||N.totalMin); } };
   $('#gShareTrip').onclick = shareTrip;
   $('#gSound').onclick = ()=>{ N.sound = { on:'alerts', alerts:'off', off:'on' }[N.sound]; store('sound', N.sound); setSoundIcon(); toast({ on:'Sound on', alerts:'Alerts only', off:'Muted' }[N.sound]); if(N.sound==='off' && 'speechSynthesis' in window) speechSynthesis.cancel(); };
-  $('#gCompass').onclick = ()=>{ N.view = { '3d':'up', up:'north', north:'3d' }[N.view]; store('view', N.view); N.follow = true; $('#gRecenter').hidden = true; setCompass(); toast(VIEW_NAMES[N.view]); driveLayout(); if(!G){ demoDraw(); } else navFrameRender(); };
-  $('#gRecenter').onclick = ()=>{ N.follow = true; $('#gRecenter').hidden = true; if(N.pos && N.map) N.map.panTo(N.pos); if(!G) demoCamera(); };
+  $('#gCompass').onclick = ()=>{ N.view = { '3d':'up', up:'north', north:'3d' }[N.view]; store('view', N.view); recenter(); toast(VIEW_NAMES[N.view]); };
+  $('#gRecenter').onclick = recenter;
+  $('#gZoomIn').onclick = ()=>zoomBy(1); $('#gZoomOut').onclick = ()=>zoomBy(-1);
   $('#gNavHandle').onclick = ()=>{ const m = $('#gNavMore'); m.hidden = !m.hidden; $('#gNavHandle').setAttribute('aria-expanded', String(!m.hidden)); };
   $('#gNavMore').querySelectorAll('[data-nav]').forEach(b=>b.onclick = ()=>{
     const a = b.dataset.nav; $('#gNavMore').hidden = true;
     if(a==='share') shareTrip();
-    else if(a==='overview'){ N.follow = false; $('#gRecenter').hidden = false; if(N.map){ const bb = new google.maps.LatLngBounds(); N.path.forEach(p=>bb.extend(p)); N.map.setHeading?.(0); N.map.setTilt?.(0); N.map.fitBounds(bb, 80); } else demoCamera(true); }
+    else if(a==='overview'){ N.follow = false; $('#gRecenter').hidden = false; driveLayout(); if(N.map){ const bb = new google.maps.LatLngBounds(); N.path.forEach(p=>bb.extend(p)); N.map.setHeading?.(0); N.map.setTilt?.(0); N.map.fitBounds(bb, 80); } else demoCamera(true); }
     else openSheet(a);
   });
   window.addEventListener('resize', ()=>{ if(N.open){ placeFabs(); driveLayout(); if(!G) demoDraw(); } });
@@ -2761,6 +2851,7 @@ const GD = {
   alt:'M90 640 C 200 610, 330 520, 330 400 S 300 230, 310 150',
 };
 function demoPlan(){
+  N.demoView = null;
   const fromP = N.from.here ? (N.pos || PLACES[0]) : N.from;
   const km = Math.max(2, haversine(fromP, N.to) * 1.3);
   const sp = DEMO_SPEED[N.mode] || 40;
@@ -2797,8 +2888,9 @@ function demoDraw(){
   const dotted = !isRoad(N.mode) && N.mode!=='transit';
   order.forEach(i=>{ const r = rs[i], sel = N.stage==='nav' || i===N.sel, d = GD[r.demoKey];
     const k = N.stage==='nav' ? 0.55 : 1;
+    const trim = N.stage==='nav' ? ` data-trim="${esc(d)}"` : '';
     world += dotted ? `<path d="${d}" fill="none" stroke="${sel?'#3B6CFF':'#9DB4FF'}" stroke-width="${9*k}" stroke-linecap="round" stroke-dasharray="1 ${15*k}" data-dr="${i}"/>`
-      : `<path d="${d}" fill="none" stroke="${sel?'#1B2BB0':'#6F86C9'}" stroke-width="${(sel?15:12)*k}" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${sel?'#3B6CFF':'#B6C6FF'}" stroke-width="${(sel?9:8)*k}" stroke-linecap="round" data-dr="${i}" style="cursor:pointer"/>`; });
+      : `<path d="${d}" fill="none" stroke="${sel?'#1B2BB0':'#6F86C9'}" stroke-width="${(sel?15:12)*k}" stroke-linecap="round"${trim}/><path d="${d}" fill="none" stroke="${sel?'#3B6CFF':'#B6C6FF'}" stroke-width="${(sel?9:8)*k}" stroke-linecap="round" data-dr="${i}" style="cursor:pointer"${trim}/>`; });
   if(rs.length && isRoad(N.mode)) world += `<path d="M 175 455 C 185 430, 192 415, 200 400" fill="none" stroke="#F2A33A" stroke-width="9" stroke-linecap="round"/>`;
   if(N.stage!=='home'){ world += `<g transform="translate(90 640) scale(${k1})"><circle r="11" fill="#4D8DFF" stroke="#fff" stroke-width="4"/></g><g transform="translate(310 150) scale(${k1*1.3})"><path d="M0 0 C 0 0 -13 -12 -13 -24 A 13 13 0 0 1 13 -24 C 13 -12 0 0 0 0Z" fill="#E5484D" stroke="#fff" stroke-width="2"/><circle cx="0" cy="-24" r="5" fill="#fff"/></g>`; }
   if(N.showReports) N.reports.filter(r=>r.dx!=null).forEach(r=>{ world += `<g transform="translate(${r.dx} ${r.dy}) rotate(${-demoT.rot}) scale(${k1})" class="rep"><circle r="15" fill="${REPORTS[r.type].bg}" stroke="#fff" stroke-width="2.5"/><g transform="translate(-10 -10) scale(.84)">${REPORTS[r.type].icon}</g></g>`; });
@@ -2813,7 +2905,51 @@ function demoDraw(){
   }
   if(N.stage==='nav' && N.demoCallout) bubbles += `<g transform="translate(${N.demoCallout.x} ${N.demoCallout.y}) rotate(${-demoT.rot}) scale(${1/demoT.s})"><rect x="${-N.demoCallout.t.length*5.2-12}" y="-44" width="${N.demoCallout.t.length*10.4+24}" height="32" rx="8" fill="#2B3DE0"/><text x="0" y="-22" text-anchor="middle" font-family="Figtree, sans-serif" font-weight="800" font-size="16" fill="#fff">${esc(N.demoCallout.t)}</text></g>`;
   $('#gDyn').innerHTML = world + bubbles;
+  demoTrim();
   svg.querySelectorAll('[data-dr],[data-db]').forEach(e=>e.addEventListener('click', ()=>selectRoute(+(e.dataset.dr ?? e.dataset.db))));
+}
+// hide the part of the practice route already driven
+function demoTrim(){
+  if(N.stage!=='nav' || !N.demoCar) return;
+  document.querySelectorAll('#gDyn [data-trim]').forEach(e=>{
+    const d = e.getAttribute('d'); if(!_demoPaths[d]) demoPathPoint(d, 0);
+    const L = _demoPaths[d].len; e.setAttribute('stroke-dasharray', `${L} ${L}`); e.setAttribute('stroke-dashoffset', String(-(N.demoCar.f||0)*L));
+  });
+}
+// the practice map's own free camera: in navigation it is N.demoFree, on the other screens N.demoView
+function demoFreeView(){
+  if(N.stage==='nav'){
+    if(N.follow){ N.follow = false; N.demoFree = { x:N.demoCar?.x||200, y:N.demoCar?.y||400, s:2.4*Math.pow(2, A.zOff||0) }; $('#gRecenter').hidden = false; driveLayout(); }
+    if(!N.demoFree) N.demoFree = { x:N.demoCar?.x||200, y:N.demoCar?.y||400, s:2.4 };
+    return N.demoFree;
+  }
+  if(!N.demoView){ const svg = $('#gDemo'), W = svg.clientWidth || innerWidth, H = svg.clientHeight || innerHeight, t = demoT;
+    N.demoView = { x:(W/2 - (t.tx||0))/(t.s||1), y:(H/2 - (t.ty||0))/(t.s||1), s:t.s||1 }; }
+  return N.demoView;
+}
+// finger / mouse panning and zooming of the practice map on every screen (the real Google map does this itself)
+function demoGestures(){
+  const svg = $('#gDemo'); if(!svg || svg.dataset.g) return; svg.dataset.g = 1;
+  const pts = new Map(); let moved = 0, pinch0 = 0, s0 = 1, mid0 = null, dragged = false;
+  const redraw = ()=>{ demoCamera(); demoDraw(); };
+  svg.addEventListener('pointerdown', e=>{ pts.set(e.pointerId, { x:e.clientX, y:e.clientY }); moved = 0; dragged = false;
+    if(pts.size===2){ const [a,b] = [...pts.values()]; pinch0 = Math.hypot(a.x-b.x, a.y-b.y); s0 = demoFreeView().s; } });
+  svg.addEventListener('pointermove', e=>{
+    const p = pts.get(e.pointerId); if(!p) return;
+    const dx = e.clientX - p.x, dy = e.clientY - p.y; p.x = e.clientX; p.y = e.clientY; moved += Math.abs(dx) + Math.abs(dy);
+    if(moved < 6 && pts.size < 2) return;
+    dragged = true;
+    const v = demoFreeView();
+    if(pts.size >= 2){ const [a,b] = [...pts.values()]; const dd = Math.hypot(a.x-b.x, a.y-b.y); if(pinch0) v.s = Math.max(.25, Math.min(10, s0*dd/pinch0)); }
+    else { v.x -= dx / v.s; v.y -= dy / v.s; }
+    redraw();
+  });
+  const up = e=>{ pts.delete(e.pointerId); if(pts.size < 2) pinch0 = 0; };
+  svg.addEventListener('pointerup', up); svg.addEventListener('pointercancel', up);
+  // a drag that ends on a route must not also select it
+  svg.addEventListener('click', e=>{ if(dragged){ e.stopPropagation(); e.preventDefault(); dragged = false; } }, true);
+  svg.addEventListener('dblclick', e=>{ e.preventDefault(); const v = demoFreeView(); v.s = Math.min(10, v.s*2); redraw(); });
+  svg.addEventListener('wheel', e=>{ e.preventDefault(); const v = demoFreeView(); v.s = Math.max(.25, Math.min(10, v.s * Math.exp(-e.deltaY*0.0015))); redraw(); }, { passive:false });
 }
 const _demoPaths = {};
 function demoPathPoint(d, f){
@@ -2825,15 +2961,24 @@ function demoPathPoint(d, f){
 function demoCamera(overview){
   const svg = $('#gDemo'), g = $('#gWorld'); if(!svg || !g) return;
   const W = svg.clientWidth || innerWidth, H = svg.clientHeight || innerHeight;
+  if(N.stage!=='nav' && N.demoView && !overview){
+    const f = N.demoView; demoT = { s:f.s, rot:0, tx:W/2 - f.x*f.s, ty:H/2 - f.y*f.s };
+    g.setAttribute('transform', `translate(${demoT.tx} ${demoT.ty}) scale(${f.s})`); return;
+  }
+  if(N.stage==='nav' && !N.follow && N.demoFree && !overview){
+    const f = N.demoFree; demoT = { s:f.s, rot:0 };
+    g.setAttribute('transform', `translate(${W/2} ${H/2}) scale(${f.s}) translate(${-f.x} ${-f.y})`);
+    setCompass(0); return;
+  }
   if(N.stage==='nav' && N.demoCar && N.follow && !overview){
     if(driving()){   // the whole map is turned and tilted by CSS; keep the car at the centre of the big square
-      demoT = { s:2.4, rot:-N.demoCar.a };
-      g.setAttribute('transform', `translate(${W/2} ${H/2}) scale(2.4) translate(${-N.demoCar.x} ${-N.demoCar.y})`);
+      const zs = 2.4*Math.pow(2, A.zOff||0); demoT = { s:zs, rot:-N.demoCar.a };
+      g.setAttribute('transform', `translate(${W/2} ${H/2}) scale(${zs}) translate(${-N.demoCar.x} ${-N.demoCar.y})`);
       driveTransform(N.demoCar.a); setCompass(N.demoCar.a);
       return;
     }
-    demoT = { s:2.4, rot:0 };
-    g.setAttribute('transform', `translate(${W/2} ${H*0.55}) scale(2.4) translate(${-N.demoCar.x} ${-N.demoCar.y})`);
+    const zs = 2.4*Math.pow(2, A.zOff||0); demoT = { s:zs, rot:0 };
+    g.setAttribute('transform', `translate(${W/2} ${H*0.55}) scale(${zs}) translate(${-N.demoCar.x} ${-N.demoCar.y})`);
     return;
   }
   const top = N.stage==='nav' ? 160 : ($('#gTop').getBoundingClientRect().bottom || 170) + 10;
@@ -2843,11 +2988,12 @@ function demoCamera(overview){
   const bx = 30, by = 95, bw = 320, bh = 565;   // routes' bounding box in world units
   const s = Math.max(0.3, Math.min((right-left)/bw, (bottom-top)/bh));
   const tx = left + ((right-left) - bw*s)/2 - bx*s, ty = top + ((bottom-top) - bh*s)/2 - by*s;
-  demoT = { s, rot:0 };
+  demoT = { s, rot:0, tx, ty };
   g.setAttribute('transform', `translate(${tx} ${ty}) scale(${s})`);
 }
 function demoToLatLng(p){ return { lat:(N.to?.lat||0) + (150-p.y)/30000, lng:(N.to?.lng||0) + (p.x-310)/30000 }; }
 function demoNav(){
+  A.zOff = 0;
   const r = N.routes[N.sel]; const d = GD[r.demoKey];
   const total = r.steps.reduce((s,x)=>s+x.dist, 0);
   const per = 26, TICK = 300;          // one "tick" = 300 ms of trip time; events fire per tick, motion is continuous
@@ -2867,8 +3013,9 @@ function demoNav(){
     if(p.idx >= N.steps.length-1){ cancelAnimationFrame(N.sim); N.sim = null; arrived(); return; }
     // smooth heading: ease the car's angle toward the path direction
     const raw = demoPathPoint(d, p.f), prevA = N.demoCar ? N.demoCar.a : raw.a;
-    raw.a = angLerp(prevA, raw.a, Math.min(1, dt/180));
+    raw.a = angLerp(prevA, raw.a, Math.min(1, dt/180)); raw.f = p.f;
     N.demoCar = raw;
+    demoTrim();
     if(t !== lastTick){
       lastTick = t; N.idx = p.idx;
       const idx = p.idx, stepT = t - idx*per, step = N.steps[idx], next = N.steps[idx+1], after = N.steps[idx+2];
@@ -2878,7 +3025,7 @@ function demoNav(){
       if(stepT===Math.floor(per*.4)) speak(next.man.startsWith('TRANSIT') ? 'Get ready. Your stop is coming up.' : `In ${sayDist(left)}, ${lc(next.text)}`);
       if(stepT===per-3 && !step.man.startsWith('TRANSIT')) speak(next.text);
       const nf = Math.min(.999, (N.steps.slice(0,idx+1).reduce((s,x)=>s+x.dist,0))/total);
-      N.demoCallout = next.street && next.man!=='ARRIVE' ? { ...demoPathPoint(d, nf), t:next.street } : null;
+      N.demoCallout = next.street && next.man!=='ARRIVE' && (nf - p.f)*total > 70 ? { ...demoPathPoint(d, nf), t:next.street } : null;
       updateNavBar(total-p.done, Math.max(1, Math.round(r.min*(1-p.f))));
       if(Math.abs(p.f-0.42) < 0.012 && !N.alerted.has('demo-haz')){ N.alerted.add('demo-haz'); const rr = REPORTS.roadworks;
         $('#gAlert').innerHTML = `<span class="g-rep" style="position:static;transform:none;background:${rr.bg};width:26px;height:26px">${repDot('roadworks')}</span>Roadworks reported ahead · ${fmtDist(450)}`; $('#gAlert').hidden = false; setTimeout(()=>$('#gAlert').hidden = true, 8000);
